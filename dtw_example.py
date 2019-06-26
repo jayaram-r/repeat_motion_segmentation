@@ -11,7 +11,6 @@ https://tslearn.readthedocs.io/en/latest/gen_modules/tslearn.metrics.html
 import os
 import numpy as np
 import dtw
-from tslearn.metrics import dtw_path as dtw_tslearn
 import logging
 import matplotlib
 matplotlib.use('Agg')
@@ -66,20 +65,14 @@ def main():
     x2 = generate_sequence(n, curve='sine')
 
     # Two small example sequences for testing
-    # x1 = np.array([0, 1, 1, 2, 3, 2, 1], dtype=np.float)
-    # x2 = np.array([1, 1, 2, 3, 2, 0], dtype=np.float)
+    # x1 = np.array([2, 4, 6, 3, 1, 2], dtype=np.float)
+    # x2 = np.array([3, 4, 6, 3, 1, 2, 2, 1, 1], dtype=np.float)
 
     # Calculate the DTW distance between the sequences
     dist, cost_matrix, acc_cost_matrix, path = dtw.accelerated_dtw(x1[:, np.newaxis], x2[:, np.newaxis],
                                                                    dist='cityblock')
     path = zip(path[0], path[1])
     logger.info("DTW distance = %.6f", dist)
-
-    """
-    # Using the DTW implementation from tslearn. Uses Euclidean distance, which cannot be modified.
-    path, dist = dtw_tslearn(x1, x2)
-    logger.info("DTW distance = %.6f", dist)
-    """
 
     # Generate some plots
     fig = plt.figure()

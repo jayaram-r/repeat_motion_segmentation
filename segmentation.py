@@ -17,10 +17,10 @@ import numpy as np
 import copy
 import operator
 import time
+import random
 import multiprocessing
 from functools import partial
 import dtw
-# from tslearn.metrics import dtw_path as dtw_tslearn
 import logging
 import matplotlib
 matplotlib.use('Agg')
@@ -46,7 +46,7 @@ def gaussian_sequence(n, inverted=False):
     return y
 
 
-def generate_sequence(n, curve='sine', noise=True, noise_level=0.005):
+def generate_sequence(n, curve='sine', noise=True, noise_level=0.005, tp=1.0):
     if n < 1:
         logger.warning("Sequence length is 0. Returning empty array")
         return np.array([])
@@ -60,9 +60,9 @@ def generate_sequence(n, curve='sine', noise=True, noise_level=0.005):
 
     m = n - ni - nf
     if curve == 'sine':
-        x = np.sin(((2 * np.pi) / m) * np.arange(m))
+        x = np.sin(((2.0 * np.pi) / (tp * m)) * np.arange(m))
     elif curve == 'cosine':
-        x = np.cos(((2 * np.pi) / m) * np.arange(m))
+        x = np.cos(((2.0 * np.pi) / (tp * m)) * np.arange(m))
     elif curve == 'gaussian':
         x = gaussian_sequence(m)
     elif curve == 'gaussian_inverted':
@@ -172,12 +172,9 @@ def segment_repeat_sequences(data, templates):
 
 
 def main():
-    np.random.seed(seed=157)
+    np.random.seed(seed=183)
     # Choose one of: 'sine', 'cosine', 'gaussian', 'gaussian_inverted'
     curve = 'sine'
-
-    # Number of repetitions (segments) in the sequence
-    num_repeat = 15
 
     # The length of each repetition subsequence is picked at random from this interval
     length_range = [100, 125]
@@ -185,19 +182,25 @@ def main():
     # Generate a set of sequences to use as templates for this action
     num_templates = 5
     template_sequences = []
-    for _ in range(num_templates):
-        template_sequences.append(
-            generate_sequence(np.random.randint(length_range[0], high=length_range[1]), curve=curve)
-        )
+    for tp in [1.0, 0.5, 0.25, 2.0]:
+        a = []
+        for _ in range(num_templates):
+            a.append(
+                generate_sequence(np.random.randint(length_range[0], high=length_range[1]), curve=curve, tp=tp)
+            )
 
-    template_sequences = [template_sequences]
+        template_sequences.append(a)
 
     # Generate the data sequence
     data_sequence = []
-    for _ in range(num_repeat):
-        data_sequence.append(
-            generate_sequence(np.random.randint(length_range[0], high=length_range[1]), curve=curve)
-        )
+    for tp, num_repeat in [(0.25, 4), (0.5, 3), (1.0, 5), (2.0, 3)]:
+        for _ in range(num_repeat):
+            data_sequence.append(
+                generate_sequence(np.random.randint(length_range[0], high=length_range[1]), curve=curve, tp=tp)
+            )
+
+    # Randomize the order of the sequences
+    random.shuffle(data_sequence)
 
     # Concatenate the repetition subsequences into one. The segmentation algorithm takes this sequence as input.
     data_sequence = np.concatenate(data_sequence)
