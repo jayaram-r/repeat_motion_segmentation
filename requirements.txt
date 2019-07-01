@@ -3,6 +3,7 @@ backcall==0.1.0
 cycler==0.10.0
 Cython==0.29.10
 decorator==4.4.0
+dtaidistance==1.2.2
 dtw==1.3.3
 ipython==7.4.0
 ipython-genutils==0.2.0

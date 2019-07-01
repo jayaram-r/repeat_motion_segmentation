@@ -4,13 +4,15 @@ Dynamic Time Warping (DTW) distance between two time series.
 DTW implentations source:
 https://github.com/pierre-rouanet/dtw
 
-tslearn package:
-https://tslearn.readthedocs.io/en/latest/gen_modules/tslearn.metrics.html
+From DTAI research group. Has faster implementations based on C.
+https://github.com/wannesm/dtaidistance
+https://dtaidistance.readthedocs.io/en/latest/index.html
 
 """
 import os
 import numpy as np
 import dtw
+import dtaidistance
 import logging
 import matplotlib
 matplotlib.use('Agg')
@@ -65,13 +67,22 @@ def main():
     x2 = generate_sequence(n, curve='sine')
 
     # Two small example sequences for testing
-    # x1 = np.array([2, 4, 6, 3, 1, 2], dtype=np.float)
-    # x2 = np.array([3, 4, 6, 3, 1, 2, 2, 1, 1], dtype=np.float)
+    # x1 = np.array([2, 4, 6, 3, 1, 2])
+    # x2 = np.array([3, 4, 6, 3, 1, 2, 2, 1, 1])
 
     # Calculate the DTW distance between the sequences
+    """
     dist, cost_matrix, acc_cost_matrix, path = dtw.accelerated_dtw(x1[:, np.newaxis], x2[:, np.newaxis],
-                                                                   dist='cityblock')
+                                                                   dist='euclidean')
     path = zip(path[0], path[1])
+    """
+    # Cast into type double in order to use the fast (C) implementation
+    x1 = x1.astype(np.double)
+    x2 = x2.astype(np.double)
+    # dist = dtaidistance.dtw.distance_fast(x1, x2, window=None)
+    dist, path_matrix = dtaidistance.dtw.warping_paths(x1, x2, window=None)
+    path = dtaidistance.dtw.best_path(path_matrix)
+    dist = dist / float(x1.shape[0] + x2.shape[0])
     logger.info("DTW distance = %.6f", dist)
 
     # Generate some plots

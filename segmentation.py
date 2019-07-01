@@ -4,8 +4,9 @@ Segmenting a time series with multiple repetitions of a given action.
 DTW implentations source:
 https://github.com/pierre-rouanet/dtw
 
-tslearn package:
-https://tslearn.readthedocs.io/en/latest/gen_modules/tslearn.metrics.html
+From DTAI research group. Has faster implementations based on C.
+https://github.com/wannesm/dtaidistance
+https://dtaidistance.readthedocs.io/en/latest/index.html
 
 We can also use FastDTW, which has linear time and space complexity in the length of the longer sequence.
 An open source implementation of FastDTW can be found here:
@@ -17,7 +18,7 @@ import copy
 import multiprocessing
 from functools import partial
 from scipy import stats
-import dtw
+from dtaidistance import dtw
 import logging
 from repeat_motion_segmentation.utils import normalize_maxmin
 
@@ -27,13 +28,22 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def average_distance_to_templates(sequence, templates):
+def average_distance_to_templates(sequence, templates, warping_window):
+    len_seq = sequence.shape[0]
     val_min = np.inf
     label = 1
     for i, t in enumerate(templates, start=1):
         val = 0.0
-        for seq in t:
-            d, _, _, _ = dtw.accelerated_dtw(sequence, seq, dist=METRIC)
+        for temp in t:
+            len_temp = temp.shape[0]
+            if warping_window is not None:
+                warping_window = int(np.ceil(warping_window * max(len_seq, len_temp)))
+                # If the sequences have different lengths, the warping window cannot be smaller than the difference
+                # between the length of the sequences
+                warping_window = max(warping_window, abs(len_seq - len_temp))
+
+            d = (dtw.distance_fast(sequence[:, 0], temp[:, 0], window=warping_window)) / float(len_seq + len_temp)
+            # d, _, _, _ = dtw.accelerated_dtw(sequence, seq, dist=METRIC)
             val += d
 
         val /= len(t)
@@ -44,15 +54,26 @@ def average_distance_to_templates(sequence, templates):
     return val_min, label
 
 
-def helper_dtw_distance(sequence, templates, index_tuple):
-    d, _, _, _ = dtw.accelerated_dtw(sequence, templates[index_tuple[0]][index_tuple[1]], dist=METRIC)
+def helper_dtw_distance(sequence, templates, warping_window, index_tuple):
+    t = templates[index_tuple[0]][index_tuple[1]]
+    len_seq = sequence.shape[0]
+    len_temp = t.shape[0]
+    if warping_window is not None:
+        warping_window = int(np.ceil(warping_window * max(len_seq, len_temp)))
+        # If the sequences have different lengths, the warping window cannot be smaller than the difference
+        # between the length of the sequences
+        warping_window = max(warping_window, abs(len_seq - len_temp))
+
+    d = (dtw.distance_fast(sequence[:, 0], t[:, 0], window=warping_window)) / float(len_seq + len_temp)
+    # d, _, _, _ = dtw.accelerated_dtw(sequence, t, dist=METRIC)
+
     return index_tuple[0], index_tuple[1], d
 
 
-def average_distance_to_templates_parallel(sequence, templates, num_proc):
+def average_distance_to_templates_parallel(sequence, templates, warping_window, num_proc):
     num_actions = len(templates)
     indices = [(i, j) for i in range(num_actions) for j in range(len(templates[i]))]
-    helper_partial = partial(helper_dtw_distance, sequence, templates)
+    helper_partial = partial(helper_dtw_distance, sequence, templates, warping_window)
     pool_obj = multiprocessing.Pool(processes=num_proc)
     results = []
     _ = pool_obj.map_async(helper_partial, indices, chunksize=None, callback=results.extend)
@@ -90,7 +111,8 @@ def normalize_subsequence(sequence, m, sequence_mean, sequence_stdev, sequence_m
     return sequence_norm
 
 
-def search_subsequence(sequence, templates, min_length, max_length, normalize=True, normalization_type='z-score'):
+def search_subsequence(sequence, templates, min_length, max_length, normalize=True, normalization_type='z-score',
+                       warping_window=None):
     """
     Search for the subsequence that leads to minimum average DTW distance to the template sequences.
 
@@ -101,6 +123,15 @@ def search_subsequence(sequence, templates, min_length, max_length, normalize=Tr
     :param max_length: maximum length of the subsequence.
     :param normalize: Apply normalization to the templates and the data subsequences, if set to True.
     :param normalization_type: Type of normalization to apply. Should be set to 'z-score' or 'max-min'.
+    :param warping_window: Size of the warping window used to constrain the DTW matching path. This is also know as
+                           the Sakoe-Chiba band in DTW literature. This can be set to `None` if no warping window
+                           constraint is to be applied; else it should be set to a fractional value in (0, 1]. The
+                           actual warping window is obtained by multiplying this fraction with the length of the
+                           longer sequence. Suppose this window value is `w`, then any point `(i, j)` along the DTW
+                           path satisfies `|i - j| <= w`. Setting this to a large value (closer to 1), allows the
+                           warping path to be flexible, while setting it to a small value (closer to 0) will constrain
+                           the warping path to be closer to the diagonal. Note that a small value can also speed-up
+                           the DTW calculation significantly.
 
     :return: tuple (a, b, c), where `a` is the best subsequence length, `b` is the minimum average DTW distance,
              and `c` is the label of the best-matching template.
@@ -137,18 +168,19 @@ def search_subsequence(sequence, templates, min_length, max_length, normalize=Tr
     sequence_norm = normalize_subsequence(sequence, len_best, sequence_mean, sequence_stdev, sequence_min,
                                           sequence_max, normalize, normalization_type)
     if parallel:
-        d_min, label_best = average_distance_to_templates_parallel(sequence_norm, templates, num_proc)
+        d_min, label_best = average_distance_to_templates_parallel(sequence_norm, templates, warping_window,
+                                                                   num_proc)
     else:
-        d_min, label_best = average_distance_to_templates(sequence_norm, templates)
+        d_min, label_best = average_distance_to_templates(sequence_norm, templates, warping_window)
 
     search_set = set(range(min_length, max_length + 1)) - {len_best}
     for m in search_set:
         sequence_norm = normalize_subsequence(sequence, m, sequence_mean, sequence_stdev, sequence_min,
                                               sequence_max, normalize, normalization_type)
         if parallel:
-            d, label = average_distance_to_templates_parallel(sequence_norm, templates, num_proc)
+            d, label = average_distance_to_templates_parallel(sequence_norm, templates, warping_window, num_proc)
         else:
-            d, label = average_distance_to_templates(sequence_norm, templates)
+            d, label = average_distance_to_templates(sequence_norm, templates, warping_window)
 
         if d < d_min:
             d_min = d
@@ -158,7 +190,7 @@ def search_subsequence(sequence, templates, min_length, max_length, normalize=Tr
     return len_best, d_min, label_best
 
 
-def segment_repeat_sequences(data, templates, normalize=True, normalization_type='z-score'):
+def segment_repeat_sequences(data, templates, normalize=True, normalization_type='z-score', warping_window=None):
     """
     Segment the sequence `data` to closely match the sequences specified in the list `templates`.
 
@@ -167,19 +199,30 @@ def segment_repeat_sequences(data, templates, normalize=True, normalization_type
                       each `s_ij` is a numpy array (of shape (M, 1)) corresponding to a template sequence.
     :param normalize: Apply normalization to the templates and the data subsequences, if set to True.
     :param normalization_type: Type of normalization to apply. Should be set to 'z-score' or 'max-min'.
+    :param warping_window: Size of the warping window used to constrain the DTW matching path. This is also know as
+                           the Sakoe-Chiba band in DTW literature. This can be set to `None` if no warping window
+                           constraint is to be applied; else it should be set to a fractional value in (0, 1]. The
+                           actual warping window is obtained by multiplying this fraction with the length of the
+                           longer sequence. Suppose this window value is `w`, then any point `(i, j)` along the DTW
+                           path satisfies `|i - j| <= w`. Setting this to a large value (closer to 1), allows the
+                           warping path to be flexible, while setting it to a small value (closer to 0) will constrain
+                           the warping path to be closer to the diagonal. Note that a small value can also speed-up
+                           the DTW calculation significantly.
 
     :return:
         data_segments: list of segmented subsequences, each of which are numpy arrays of shape (m, 1).
         labels: list of best-matching template labels for the subsequences, where value `i` corresponds to the
                 templates in position `i - 1` of the input list `templates`.
     """
+    # `alpha` controls the search interval of the subsequence length
+    alpha = 0.75
     if normalization_type not in ('z-score', 'max-min'):
         raise ValueError("Invalid value '{}' for the parameter 'normalization_type'.".format(normalization_type))
 
     # Use the length of the template sequences as reference to define the search range for the subsequences
     l_min, l_avg, l_max = np.percentile([b.shape[0] for a in templates for b in a], [0, 50, 100])
-    min_length = int(min(l_min, max(2, np.floor(0.5 * l_avg))))
-    max_length = int(max(l_max, np.ceil(2.0 * l_avg)))
+    min_length = int(min(l_min, max(2, np.floor(alpha * l_avg))))
+    max_length = int(max(l_max, np.ceil((1.0 / alpha) * l_avg)))
 
     logger.info("Length of the input sequence = %d.", data.shape[0])
     num_actions = len(templates)
@@ -208,7 +251,8 @@ def segment_repeat_sequences(data, templates, normalize=True, normalization_type
     k = 1
     while data_rem.shape[0] > min_length:
         m, d_min, label = search_subsequence(data_rem, templates_norm, min_length, max_length,
-                                             normalize=normalize, normalization_type=normalization_type)
+                                             normalize=normalize, normalization_type=normalization_type,
+                                             warping_window=warping_window)
         data_segments.append(data_rem[:m, :])
         labels.append(label)
         data_rem = data_rem[m:, :]
