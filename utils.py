@@ -57,7 +57,13 @@ def generate_sequence(n, curve='sine', noise=True, noise_level=0.005, tp=1.0):
 
 def normalize_maxmin(x):
     x_min = np.min(x, axis=0)
+    if isinstance(x_min, np.ndarray):
+        x_min = x_min[0]
+
     x_max = np.max(x, axis=0)
+    if isinstance(x_max, np.ndarray):
+        x_max = x_max[0]
+
     if x_max > x_min:
         y = (1.0 / (x_max - x_min)) * (x - x_min)
     else:
