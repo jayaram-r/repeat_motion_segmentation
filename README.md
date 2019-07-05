@@ -31,7 +31,8 @@ which should generate a plot of the segmented time series in the file `segmentat
 The function `segmentation.segment_repeat_sequences` can be used to segment an input time series. An example of this can be found in `test_segmentation.py` and is briefly explained below.
 ```python
 data_segments, labels = segment_repeat_sequences(data_sequence, template_sequences, normalize=True, 
-                                                 normalization_type='z-score', warping_window=0.5, alpha=0.75)                                    
+                                                 normalization_type='z-score', warping_window=0.5, 
+                                                 alpha=0.75)                             
 ```
 #### Inputs
 - `data_sequence`: numpy array of shape `(n, 1)` with the values of the time series to be segmented. For example,
