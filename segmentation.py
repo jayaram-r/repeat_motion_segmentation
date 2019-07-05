@@ -55,8 +55,13 @@ def average_lb_distance_to_templates2(sequence, templates_info):
         for temp in t:
             mask1 = sequence[:, 0] > temp.max
             mask2 = sequence[:, 0] < temp.min
+            # For the first and last values of the sequence, we calculate the exact deviation instead of
+            # deviation with the maximum or minimum
+            mask1[0] = mask1[-1] = mask2[0] = mask2[-1] = False
             val += (np.sqrt(np.sum((sequence[mask1, 0] - temp.max) ** 2) +
-                            np.sum((sequence[mask2, 0] - temp.min) ** 2)) /
+                            np.sum((sequence[mask2, 0] - temp.min) ** 2) +
+                            (sequence[0, 0] - temp.first_value) ** 2 +
+                            (sequence[-1, 0] - temp.last_value) ** 2) /
                     (len_seq + temp.length))
 
         val /= len(t)
@@ -244,31 +249,44 @@ def search_subsequence(sequence, templates, templates_info, min_length, max_leng
     return len_best, d_min, label_best
 
 
-def template_preprocessing(templates, normalize=True, normalization_type='z-score'):
+def template_preprocessing(templates, alpha, normalize=True, normalization_type='z-score'):
     """
     Normalize the template sequences if required and save some information (length, minimum, and maximum) of each
     of the template sequences.
 
     :param templates: see function `segment_repeat_sequences`.
+    :param alpha: see function `segment_repeat_sequences`.
     :param normalize: see function `segment_repeat_sequences`.
     :param normalization_type: see function `segment_repeat_sequences`.
 
-    :return: (templates_norm, templates_info)
-    - templates_norm:
-    - templates_info:
+    :return: (templates_norm, templates_info, min_length, max_length)
+    - templates_norm: list of normalized template sequences with the same format as `templates`.
+    - templates_info: list of namedtuples with information about the templates.
+    - min_length: int value specifying the minimum length of the subsequence to be considered during matching.
+    - max_length: int value specifying the maximum length of the subsequence to be considered during matching.
     """
     num_actions = len(templates)
     logger.info("Number of actions defined by the templates = %d.", num_actions)
     info_tuple = namedtuple('info_tuple', ['length', 'min', 'max', 'first_value', 'last_value'])
-
     if normalize:
         logger.info("Applying '%s' normalization to the template sequences.", normalization_type)
 
+    min_length = np.inf
+    max_length = -np.inf
     templates_norm = [[]] * num_actions
     templates_info = [[]] * num_actions
     for i in range(num_actions):
         num_templates = len(templates[i])
         logger.info("Number of templates for action %d = %d.", i + 1, num_templates)
+        len_stats = np.percentile([a.shape[0] for a in templates[i]], [0, 50, 100])
+        v = min(len_stats[0], max(2, np.floor(alpha * len_stats[1])))
+        if v < min_length:
+            min_length = v
+
+        v = max(len_stats[2], np.ceil((1.0 / alpha) * len_stats[1]))
+        if v > max_length:
+            max_length = v
+
         templates_norm[i] = [[]] * num_templates
         templates_info[i] = [[]] * num_templates
         for j in range(num_templates):
@@ -285,11 +303,11 @@ def template_preprocessing(templates, normalize=True, normalization_type='z-scor
                 length=arr.shape[0], min=np.min(arr), max=np.max(arr), first_value=arr[0, 0], last_value=arr[-1, 0]
             )
 
-    return templates_norm, templates_info
+    return templates_norm, templates_info, int(min_length), int(max_length)
 
 
 def segment_repeat_sequences(data, templates, normalize=True, normalization_type='z-score',
-                             warping_window=None, alpha=0.7):
+                             warping_window=None, alpha=0.75):
     """
     Segment the sequence `data` to closely match the sequences specified in the list `templates`.
 
@@ -323,14 +341,10 @@ def segment_repeat_sequences(data, templates, normalize=True, normalization_type
     if normalization_type not in ('z-score', 'max-min'):
         raise ValueError("Invalid value '{}' for the parameter 'normalization_type'.".format(normalization_type))
 
-    # Use the length of the template sequences as reference to define the search range for the subsequences
-    l_min, l_avg, l_max = np.percentile([b.shape[0] for a in templates for b in a], [0, 50, 100])
-    min_length = int(min(l_min, max(2, np.floor(alpha * l_avg))))
-    max_length = int(max(l_max, np.ceil((1.0 / alpha) * l_avg)))
-
     logger.info("Length of the input sequence = %d.", data.shape[0])
-    templates_norm, templates_info = template_preprocessing(templates, normalize=normalize,
-                                                            normalization_type=normalization_type)
+    templates_norm, templates_info, min_length, max_length = template_preprocessing(
+        templates, alpha, normalize=normalize, normalization_type=normalization_type
+    )
 
     # Starting from the left end of the sequence, find the subsequence with minimum average DTW distance from
     # the templates. Repeat this iteratively to find the segments

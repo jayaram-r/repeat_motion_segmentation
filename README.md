@@ -18,11 +18,20 @@ In addition to the packages listed in `requirements.txt`, we use the package `DT
 installed directly from the source (instead of using `pip`) as described in the installation page. For this reason, the package (`dtaidistance`) is not listed in `requirements.txt`. At the time of testing this code, version `1.2.2` 
 of this package was used.
 
+
 ### Usage
-The function `segmentation.segment_repeat_sequences` can be used to segment an input time series. An example of this can be found in `test_segmentation.py` and is explained briefly below.
+To test the installation, run
+```
+python test_segmentation.py
+```
+which should generate a plot of the segmented time series in the file `segmentation.png`. A sample output is shown below:
+
+![alt text](https://github.com/jayaram-r/repeat_motion_segmentation/blob/master/results/segmentation1.png "segmentation plot")
+
+The function `segmentation.segment_repeat_sequences` can be used to segment an input time series. An example of this can be found in `test_segmentation.py` and is briefly explained below.
 ```python
 data_segments, labels = segment_repeat_sequences(data_sequence, template_sequences, normalize=True, 
-                                                 normalization_type='z-score', warping_window=0.5, alpha=0.7)                                    
+                                                 normalization_type='z-score', warping_window=0.5, alpha=0.75)                                    
 ```
 #### Inputs
 - `data_sequence`: numpy array of shape `(n, 1)` with the values of the time series to be segmented. For example,
@@ -47,7 +56,7 @@ three actions with five template sequences per action.
                     to be closer to the diagonal. Note that a small value can also speed-up the DTW calculation significantly.
 - `alpha`: float value in the range `(0, 1)`, but recommended to be in the range `[0.5, 0.8]`. This value controls the search range for the subsequence length. If `m` is the median length of the template sequences, then the search 
            range for the subsequences is obtained by uniform sampling of the interval `[alpha * m, (1 / alpha) * m]`. A smaller value of `alpha` increases the search interval of the subsequence length resulting in a higher search 
-           time, but also a more extensive search for the best match. On the other hand, a larger value of `alpha` (e.g. 0.8) will result in a faster but less extensive search.
+           time, but also a more extensive search for the best match. On the other hand, a larger value of `alpha` (e.g. 0.85) will result in a faster but less extensive search.
            
 #### Outputs
 - `data_segments`: list of numpy arrays, where each array corresponds to a segment of the input sequence `data_sequence`. In other words, `data_segments = [seg_1, seg_2, . . ., seg_k]`, where `seg_i` is a numpy array of shape `(n_i, 1)` 
