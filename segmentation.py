@@ -148,7 +148,7 @@ def normalize_subsequence(sequence, m, sequence_mean, sequence_stdev, sequence_m
 
 
 def search_subsequence(sequence, templates, templates_info, min_length, max_length, normalize=True,
-                       normalization_type='z-score', warping_window=None):
+                       normalization_type='z-score', warping_window=None, use_lower_bounds=True):
     """
     Search for the subsequence that leads to minimum average DTW distance to the template sequences.
 
@@ -170,6 +170,7 @@ def search_subsequence(sequence, templates, templates_info, min_length, max_leng
                            warping path to be flexible, while setting it to a small value (closer to 0) will constrain
                            the warping path to be closer to the diagonal. Note that a small value can also speed-up
                            the DTW calculation significantly.
+    :param use_lower_bounds: Set to `True` to use the lower bounds of the DTW. This will speed up the search.
 
     :return: tuple (a, b, c), where `a` is the best subsequence length, `b` is the minimum average DTW distance,
              and `c` is the label of the best-matching template.
@@ -216,19 +217,19 @@ def search_subsequence(sequence, templates, templates_info, min_length, max_leng
     for m in search_set:
         sequence_norm = normalize_subsequence(sequence, m, sequence_mean, sequence_stdev, sequence_min,
                                               sequence_max, normalize, normalization_type)
-        # Cascading lower bound distances to the DTW for fast pruning of bad (non-match) sequences.
-        # Lower bound 1 based on comparison of only the first and last values of the sequence and template.
-        d_lb1 = average_lb_distance_to_templates1(sequence_norm, templates_info)
+        if use_lower_bounds:
+            # Cascading lower bound distances to the DTW for fast pruning of bad (non-match) sequences.
+            # Lower bound 1 based on comparison of only the first and last values of the sequence and template.
+            d_lb1 = average_lb_distance_to_templates1(sequence_norm, templates_info)
+            # If the minimum average distance to the templates based on this lower bound is larger than the current
+            # minimum `d_min`, then there is no need to calculate the DTW distances to the templates
+            if d_lb1 > d_min:
+                continue
 
-        # If the minimum average distance to the templates based on this lower bound is larger than the current
-        # minimum `d_min`, then there is no need to calculate the DTW distances to the templates
-        if d_lb1 > d_min:
-            continue
-
-        # Lower bound 2 based on comparison with a precomputed lower and upper bound to the template sequences.
-        d_lb2 = average_lb_distance_to_templates2(sequence_norm, templates_info)
-        if d_lb2 > d_min:
-            continue
+            # Lower bound 2 based on comparison with a precomputed lower and upper bound to the template sequences.
+            d_lb2 = average_lb_distance_to_templates2(sequence_norm, templates_info)
+            if d_lb2 > d_min:
+                continue
 
         if parallel:
             d, label = average_distance_to_templates_parallel(sequence_norm, templates, warping_window, num_proc)
@@ -287,7 +288,8 @@ def template_preprocessing(templates, normalize=True, normalization_type='z-scor
     return templates_norm, templates_info
 
 
-def segment_repeat_sequences(data, templates, normalize=True, normalization_type='z-score', warping_window=None):
+def segment_repeat_sequences(data, templates, normalize=True, normalization_type='z-score',
+                             warping_window=None, alpha=0.7):
     """
     Segment the sequence `data` to closely match the sequences specified in the list `templates`.
 
@@ -305,14 +307,19 @@ def segment_repeat_sequences(data, templates, normalize=True, normalization_type
                            warping path to be flexible, while setting it to a small value (closer to 0) will constrain
                            the warping path to be closer to the diagonal. Note that a small value can also speed-up
                            the DTW calculation significantly.
+    :param alpha: float value in the range `(0, 1)`, but recommended to be in the range `[0.5, 0.8]`. This value
+                  controls the search range for the subsequence length. If `m` is the median length of the template
+                  sequences, then the search range for the subsequences is obtained by uniform sampling of the
+                  interval `[alpha * m, (1 / alpha) * m]`. A smaller value of `alpha` increases the search interval
+                  of the subsequence length resulting in a higher search time, but also a more extensive search
+                  for the best match. On the other hand, a larger value of `alpha` (e.g. 0.8) will result in a
+                  faster but less extensive search.
 
     :return:
         data_segments: list of segmented subsequences, each of which are numpy arrays of shape (m, 1).
         labels: list of best-matching template labels for the subsequences, where value `i` corresponds to the
                 templates in position `i - 1` of the input list `templates`.
     """
-    # `alpha` controls the search interval of the subsequence length
-    alpha = 0.7
     if normalization_type not in ('z-score', 'max-min'):
         raise ValueError("Invalid value '{}' for the parameter 'normalization_type'.".format(normalization_type))
 

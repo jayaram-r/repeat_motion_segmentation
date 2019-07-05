@@ -28,7 +28,7 @@ def main():
     curve = 'sine'
 
     # The length of each repetition subsequence is picked at random from this interval
-    length_range = [100, 125]
+    length_range = [500, 550]
 
     # Generate a set of sequences to use as templates for this action
     num_templates = 5
@@ -60,7 +60,7 @@ def main():
     # Perform segmentation of the concatenated sequence
     data_segments, labels = segment_repeat_sequences(data_sequence, template_sequences,
                                                      normalize=True, normalization_type='z-score',
-                                                     warping_window=0.5)
+                                                     warping_window=0.5, alpha=0.7)
     t2 = time.time()
     logger.info("Time taken for segmentation = %.2f seconds", t2 - t1)
 
