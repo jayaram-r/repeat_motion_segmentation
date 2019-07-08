@@ -60,7 +60,7 @@ def main():
     # Perform segmentation of the concatenated sequence
     data_segments, labels = segment_repeat_sequences(data_sequence, template_sequences,
                                                      normalize=True, normalization_type='z-score',
-                                                     warping_window=0.5, alpha=0.75)
+                                                     warping_window=0.25, alpha=0.75)
     t2 = time.time()
     logger.info("Time taken for segmentation = %.2f seconds", t2 - t1)
 

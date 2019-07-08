@@ -52,9 +52,9 @@ three actions with five template sequences per action.
 - `normalization_type`: Set to either `'z-score'` or `'max-min'` which specifies the type of normalization. Typically, z-score normalization is recommended.
 - `warping_window`: Size of the warping window used to constrain the DTW matching path. This is also know as the Sakoe-Chiba band in DTW literature [6]. This can be set to `None` if no warping window
                     constraint is to be applied; else it should be set to a fractional value in `(0, 1]`. The actual warping window is obtained by multiplying this fraction with the length of the
-                    longer sequence. Suppose this window value is `w`, then any point `(i, j)` along the DTW path satisfies `|i - j| <= w`. For example, if `warping_window = 0.5` and the length of the longer sequence is 100, then the 
-                    warping window constraint is `|i - j| <= 50`. Setting this to a large value (closer to 1), allows the warping path to be flexible, while setting it to a small value (closer to 0) will constrain the warping path 
-                    to be closer to the diagonal. Note that a small value can also speed-up the DTW calculation significantly.
+                    longer sequence. Suppose this window value is `w`, then any point `(i, j)` along the DTW path satisfies `|i - j| <= w`. For example, if `warping_window = 0.25` and the length of the longer sequence is 100, then the 
+                    warping window constraint is `|i - j| <= 25`. Setting this to a large value (closer to 1), allows the warping path to be flexible, while setting it to a small value (closer to 0) will constrain the warping path 
+                    to be closer to the diagonal. In practice, a value in the range `0.1` to `0.5` should work well. Finally, note that a small value for this parameter can also speed-up the DTW calculation significantly.
 - `alpha`: float value in the range `(0, 1)`, but recommended to be in the range `[0.5, 0.8]`. This value controls the search range for the subsequence length. If `m` is the median length of the template sequences, then the search 
            range for the subsequences is obtained by uniform sampling of the interval `[alpha * m, (1 / alpha) * m]`. A smaller value of `alpha` increases the search interval of the subsequence length resulting in a higher search 
            time, but also a more extensive search for the best match. On the other hand, a larger value of `alpha` (e.g. 0.85) will result in a faster but less extensive search.

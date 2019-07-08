@@ -42,27 +42,50 @@ def average_lb_distance_to_templates1(sequence, templates_info):
     return val_min
 
 
-def average_lb_distance_to_templates2(sequence, templates_info):
+def average_lb_distance_to_templates2(sequence, templates, templates_info):
     """
     Minimum average distance to the templates, where the distance is the lower bound of the DTW distance proposed by:
     Yi, Byoung-Kee, H. V. Jagadish, and Christos Faloutsos. "Efficient retrieval of similar time sequences
     under time warping." Proceedings 14th International Conference on Data Engineering. IEEE, 1998.
+
+    Minor modifications are made to the method proposed by Yi et. al. The exact squared difference between the first
+    and the last values are computed, since that is a requirement for DTW distance. The minimum-maximum envelope
+    of the template sequence is used to calculate the first lower bound, and the second lower bound is calculated
+    by using the minimum-maximum envelope of the input sequence. The maximum of both these values is taken as the
+    final lower bound.
     """
     len_seq = sequence.shape[0]
+    sequence = sequence[:, 0]
+    min_seq = np.min(sequence)
+    max_seq = np.max(sequence)
+
     val_min = np.inf
-    for t in templates_info:
+    for i, t in enumerate(templates):
         val = 0.0
-        for temp in t:
-            mask1 = sequence[:, 0] > temp.max
-            mask2 = sequence[:, 0] < temp.min
+        for j, temp in enumerate(t):
+            info = templates_info[i][j]
             # For the first and last values of the sequence, we calculate the exact deviation instead of
             # deviation with the maximum or minimum
+            dev_first_last = (sequence[0] - info.first_value) ** 2 + (sequence[-1] - info.last_value) ** 2
+
+            # First lower bound calculated using the maximum and minimum values of the template as the envelope
+            mask1 = sequence > info.max
+            mask2 = sequence < info.min
             mask1[0] = mask1[-1] = mask2[0] = mask2[-1] = False
-            val += (np.sqrt(np.sum((sequence[mask1, 0] - temp.max) ** 2) +
-                            np.sum((sequence[mask2, 0] - temp.min) ** 2) +
-                            (sequence[0, 0] - temp.first_value) ** 2 +
-                            (sequence[-1, 0] - temp.last_value) ** 2) /
-                    (len_seq + temp.length))
+            val1 = (np.sqrt(np.sum((sequence[mask1] - info.max) ** 2) +
+                            np.sum((sequence[mask2] - info.min) ** 2) + dev_first_last) /
+                    (len_seq + info.length))
+
+            # Second lower bound calculated using the maximum and minimum values of the sequence as the envelope
+            mask1 = temp[:, 0] > max_seq
+            mask2 = temp[:, 0] < min_seq
+            mask1[0] = mask1[-1] = mask2[0] = mask2[-1] = False
+            val2 = (np.sqrt(np.sum((temp[mask1, 0] - max_seq) ** 2) +
+                            np.sum((temp[mask2, 0] - min_seq) ** 2) + dev_first_last) /
+                    (len_seq + info.length))
+
+            # Maximum of the two lower bounds is still a lower bound. This is added up to compute the average
+            val += max(val1, val2)
 
         val /= len(t)
         if val < val_min:
@@ -232,7 +255,7 @@ def search_subsequence(sequence, templates, templates_info, min_length, max_leng
                 continue
 
             # Lower bound 2 based on comparison with a precomputed lower and upper bound to the template sequences.
-            d_lb2 = average_lb_distance_to_templates2(sequence_norm, templates_info)
+            d_lb2 = average_lb_distance_to_templates2(sequence_norm, templates, templates_info)
             if d_lb2 > d_min:
                 continue
 
