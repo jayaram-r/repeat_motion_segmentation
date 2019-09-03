@@ -315,7 +315,7 @@ def template_preprocessing(templates, alpha, normalize=True, normalization_type=
         for j in range(num_templates):
             if normalize:
                 if normalization_type == 'z-score':
-                    arr = stats.zscore(templates[i][j])
+                    arr = stats.zscore(templates[i][j], axis=0)
                 else:
                     arr = normalize_maxmin(templates[i][j])
             else:
@@ -323,7 +323,8 @@ def template_preprocessing(templates, alpha, normalize=True, normalization_type=
 
             templates_norm[i][j] = arr
             templates_info[i][j] = info_tuple(
-                length=arr.shape[0], min=np.min(arr), max=np.max(arr), first_value=arr[0, 0], last_value=arr[-1, 0]
+                length=arr.shape[0], min=np.min(arr, axis=0), max=np.max(arr, axis=0),
+                first_value=arr[0, :], last_value=arr[-1, :]
             )
 
     return templates_norm, templates_info, int(min_length), int(max_length)
@@ -334,9 +335,10 @@ def segment_repeat_sequences(data, templates, normalize=True, normalization_type
     """
     Segment the sequence `data` to closely match the sequences specified in the list `templates`.
 
-    :param data: numpy array of shape (N, 1) with float values corresponding to the data sequence.
+    :param data: numpy array of shape (N, d) with float values corresponding to the data sequence.
+                 `N` is the number of points in the series and `d` is the dimension of each point in the series.
     :param templates: list `[L_1, . . ., L_k]`, where each `L_i` is another list `L_i = [s_i1, . . ., s_im]`, and
-                      each `s_ij` is a numpy array (of shape (M, 1)) corresponding to a template sequence.
+                      each `s_ij` is a numpy array (of shape (M, d)) corresponding to a template sequence.
     :param normalize: Apply normalization to the templates and the data subsequences, if set to True.
     :param normalization_type: Type of normalization to apply. Should be set to 'z-score' or 'max-min'.
     :param warping_window: Size of the warping window used to constrain the DTW matching path. This is also know as
@@ -357,14 +359,16 @@ def segment_repeat_sequences(data, templates, normalize=True, normalization_type
                   faster but less extensive search.
 
     :return:
-        data_segments: list of segmented subsequences, each of which are numpy arrays of shape (m, 1).
+        data_segments: list of segmented subsequences, each of which are numpy arrays of shape (m, d) (`m` can be
+                       different for each subsequence).
         labels: list of best-matching template labels for the subsequences, where value `i` corresponds to the
                 templates in position `i - 1` of the input list `templates`.
     """
     if normalization_type not in ('z-score', 'max-min'):
         raise ValueError("Invalid value '{}' for the parameter 'normalization_type'.".format(normalization_type))
 
-    logger.info("Length of the input sequence = %d.", data.shape[0])
+    logger.info("Length of the input sequence = %d. Dimension of the input sequence = %d.",
+                data.shape[0], data.shape[1])
     templates_norm, templates_info, min_length, max_length = template_preprocessing(
         templates, alpha, normalize=normalize, normalization_type=normalization_type
     )

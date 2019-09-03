@@ -56,18 +56,22 @@ def generate_sequence(n, curve='sine', noise=True, noise_level=0.005, tp=1.0):
 
 
 def normalize_maxmin(x):
+    """
+    Perform max-min normalization that scales the values to lie in the range [0, 1].
+
+    :param x: numpy array of shape `(n, d)`. Normalization should be done along the row dimension.
+    :return: normalized array of same shape as the input.
+    """
     x_min = np.min(x, axis=0)
-    if isinstance(x_min, np.ndarray):
-        x_min = x_min[0]
-
     x_max = np.max(x, axis=0)
-    if isinstance(x_max, np.ndarray):
-        x_max = x_max[0]
 
-    if x_max > x_min:
-        y = (1.0 / (x_max - x_min)) * (x - x_min)
+    y = np.ones_like(x)
+    mask = x_max > x_min
+    if np.all(mask):
+        y = (x - x_min) / (x_max - x_min)
     else:
-        logger.warning("Maximum and minimum values are equal. Setting all normalized values to 1.")
-        y = np.ones_like(x)
+        logger.warning("Maximum and minimum values are equal along %d dimensions. "
+                       "Setting the normalized values to 1 along these dimension(s).", x.shape[1] - np.sum(mask))
+        y[:, mask] = (x[:, mask] - x_min[mask]) / (x_max[mask] - x_min[mask])
 
     return y
