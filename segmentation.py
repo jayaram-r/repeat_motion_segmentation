@@ -160,14 +160,14 @@ def normalize_subsequence(sequence, m, sequence_mean, sequence_stdev, sequence_m
                           normalize, normalization_type):
     if normalize:
         if normalization_type == 'z-score':
-            sequence_norm = (sequence[:m, :] - sequence_mean[m - 1]) / sequence_stdev[m - 1]
+            sequence_norm = (sequence[:m, :] - sequence_mean[m - 1, :]) / sequence_stdev[m - 1, :]
         else:
             # Max-min normalization
-            if sequence_max[m - 1] > sequence_min[m - 1]:
-                sequence_norm = (sequence[:m, :] - sequence_min[m - 1]) / (sequence_max[m - 1] - sequence_min[m - 1])
-            else:
-                # Maximum and minimum values are equal. Setting all normalized values to 1
-                sequence_norm = np.ones_like(sequence[:m, :])
+            mask = sequence_max[m - 1, :] > sequence_min[m - 1, :]
+            sequence_norm = np.ones_like(sequence[:m, :])
+            if np.any(mask):
+                sequence_norm[:, mask] = ((sequence[:m, mask] - sequence_min[m - 1, mask]) /
+                                          (sequence_max[m - 1, mask] - sequence_min[m - 1, mask]))
 
     else:
         sequence_norm = sequence[:m, :]
@@ -180,13 +180,13 @@ def search_subsequence(sequence, templates, templates_info, min_length, max_leng
     """
     Search for the subsequence that leads to minimum average DTW distance to the template sequences.
 
-    :param sequence: numpy array of shape (N, 1) with float values.
+    :param sequence: numpy array of shape (N, d) with float values.
     :param templates: list `[L_1, . . ., L_k]`, where each `L_i` is another list `L_i = [s_i1, . . ., s_im]`, and
-                      each `s_ij` is a numpy array (of shape (M, 1)) corresponding to a template sequence.
+                      each `s_ij` is a numpy array (of shape (M, d)) corresponding to a template sequence.
     :param templates_info: list similar to `templates`, but each element of the list is a namedtuple with information
                            about the template such as length, minimum value, and maximum value.
-    :param min_length: minimum length of the subsequence.
-    :param max_length: maximum length of the subsequence.
+    :param min_length: minimum length of the subsequence to search.
+    :param max_length: maximum length of the subsequence to search.
     :param normalize: Apply normalization to the templates and the data subsequences, if set to True.
     :param normalization_type: Type of normalization to apply. Should be set to 'z-score' or 'max-min'.
     :param warping_window: Size of the warping window used to constrain the DTW matching path. This is also know as
@@ -219,15 +219,15 @@ def search_subsequence(sequence, templates, templates_info, min_length, max_leng
         if normalization_type == 'z-score':
             # Calculate the rolling mean and standard-deviation of the entire data sequence. This will be used
             # for z-score normalization of subsequences of different lengths
-            den = np.arange(1, N + 1).astype(np.float)
-            sequence_mean = np.cumsum(sequence) / den
-            arr = sequence[:, 0] - sequence_mean
-            sequence_stdev = np.sqrt(np.clip(np.cumsum(arr * arr) / den, 1e-16, None))
+            den = np.arange(1, N + 1).astype(np.float)[:, np.newaxis]
+            sequence_mean = np.cumsum(sequence, axis=0) / den
+            arr = (sequence - sequence_mean) ** 2
+            sequence_stdev = np.sqrt(np.clip(np.cumsum(arr, axis=0) / den, 1e-16, None))
         else:
             # Calculate the rolling maximum and minimum of the entire data sequence. This will be used in
             # the max-min normalization of subsequences of different lengths
-            sequence_min = np.minimum.accumulate(sequence[:, 0])
-            sequence_max = np.maximum.accumulate(sequence[:, 0])
+            sequence_min = np.minimum.accumulate(sequence, axis=0)
+            sequence_max = np.maximum.accumulate(sequence, axis=0)
 
     # Calculate the minimum average DTW distance to the templates for the average subsequence length
     # (between `min_length` and `max_length`). This gives a good reference value for distance-based pruning.
