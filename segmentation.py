@@ -32,8 +32,8 @@ def average_lb_distance_to_templates1(sequence, templates_info):
     for t in templates_info:
         val = 0.0
         for temp in t:
-            val += (np.sqrt((sequence[0, 0] - temp.first_value) ** 2 + (sequence[-1, 0] - temp.last_value) ** 2) /
-                    (len_seq + temp.length))
+            val += (np.sqrt(np.sum((sequence[0, :] - temp.first_value) ** 2) +
+                            np.sum((sequence[-1, :] - temp.last_value) ** 2)) / (len_seq + temp.length))
 
         val /= len(t)
         if val < val_min:
@@ -55,9 +55,8 @@ def average_lb_distance_to_templates2(sequence, templates, templates_info):
     final lower bound.
     """
     len_seq = sequence.shape[0]
-    sequence = sequence[:, 0]
-    min_seq = np.min(sequence)
-    max_seq = np.max(sequence)
+    min_seq = np.min(sequence, axis=0)
+    max_seq = np.max(sequence, axis=0)
 
     val_min = np.inf
     for i, t in enumerate(templates):
@@ -66,23 +65,34 @@ def average_lb_distance_to_templates2(sequence, templates, templates_info):
             info = templates_info[i][j]
             # For the first and last values of the sequence, we calculate the exact deviation instead of
             # deviation with the maximum or minimum
-            dev_first_last = (sequence[0] - info.first_value) ** 2 + (sequence[-1] - info.last_value) ** 2
+            dev_first_last = np.sum((sequence[0, :] - info.first_value) ** 2) + \
+                             np.sum((sequence[-1, :] - info.last_value) ** 2)
 
             # First lower bound calculated using the maximum and minimum values of the template as the envelope
-            mask1 = sequence > info.max
-            mask2 = sequence < info.min
-            mask1[0] = mask1[-1] = mask2[0] = mask2[-1] = False
-            val1 = (np.sqrt(np.sum((sequence[mask1] - info.max) ** 2) +
-                            np.sum((sequence[mask2] - info.min) ** 2) + dev_first_last) /
-                    (len_seq + info.length))
+            r1 = sequence - info.max
+            r1[r1 < 0.0] = 0.0
+            r1[0, :] = 0.0
+            r1[-1, :] = 0.0
+
+            r2 = info.min - sequence
+            r2[r2 < 0.0] = 0.0
+            r2[0, :] = 0.0
+            r2[-1, :] = 0.0
+
+            val1 = np.sqrt(np.sum(r1 ** 2) + np.sum(r2 ** 2) + dev_first_last) / (len_seq + info.length)
 
             # Second lower bound calculated using the maximum and minimum values of the sequence as the envelope
-            mask1 = temp[:, 0] > max_seq
-            mask2 = temp[:, 0] < min_seq
-            mask1[0] = mask1[-1] = mask2[0] = mask2[-1] = False
-            val2 = (np.sqrt(np.sum((temp[mask1, 0] - max_seq) ** 2) +
-                            np.sum((temp[mask2, 0] - min_seq) ** 2) + dev_first_last) /
-                    (len_seq + info.length))
+            r1 = temp - max_seq
+            r1[r1 < 0.0] = 0.0
+            r1[0, :] = 0.0
+            r1[-1, :] = 0.0
+
+            r2 = min_seq - temp
+            r2[r2 < 0.0] = 0.0
+            r2[0, :] = 0.0
+            r2[-1, :] = 0.0
+
+            val2 = np.sqrt(np.sum(r1 ** 2) + np.sum(r2 ** 2) + dev_first_last) / (len_seq + info.length)
 
             # Maximum of the two lower bounds is still a lower bound. This is added up to compute the average
             val += max(val1, val2)
