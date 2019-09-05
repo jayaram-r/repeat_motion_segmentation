@@ -13,7 +13,7 @@ from collections import namedtuple
 import multiprocessing
 from functools import partial
 from scipy import stats
-from dtaidistance import dtw
+from dtaidistance import dtw, dtw_ndim
 import logging
 from repeat_motion_segmentation.utils import normalize_maxmin
 
@@ -108,7 +108,7 @@ def average_distance_to_templates(sequence, templates, warping_window):
                 # between the length of the sequences
                 warping_window = max(warping_window, abs(len_seq - len_temp + 1))
 
-            d = (dtw.distance_fast(sequence[:, 0], temp[:, 0], window=warping_window)) / float(len_seq + len_temp)
+            d = (dtw_ndim.distance(sequence, temp, window=warping_window)) / float(len_seq + len_temp)
             val += d
 
         val /= len(t)
@@ -129,7 +129,7 @@ def helper_dtw_distance(sequence, templates, warping_window, index_tuple):
         # between the length of the sequences
         warping_window = max(warping_window, abs(len_seq - len_temp + 1))
 
-    d = (dtw.distance_fast(sequence[:, 0], t[:, 0], window=warping_window)) / float(len_seq + len_temp)
+    d = (dtw_ndim.distance(sequence, t, window=warping_window)) / float(len_seq + len_temp)
 
     return index_tuple[0], index_tuple[1], d
 
