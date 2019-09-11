@@ -1,5 +1,5 @@
 """
-Segmenting a time series with multiple repetitions of a given action.
+Segmenting a time series with multiple repetitions from a given set of actions.
 
 Dynamic time warping (DTW) implementation by the DTAI research group, which has fast implementations (with C
 bindings), is used. Documentation and installation instructions can be found below:
@@ -13,9 +13,12 @@ from collections import namedtuple
 import multiprocessing
 from functools import partial
 from scipy import stats
-from dtaidistance import dtw, dtw_ndim
+from itertools import combinations
+from dtaidistance import dtw_ndim
 import logging
-from repeat_motion_segmentation.utils import normalize_maxmin
+from repeat_motion_segmentation.utils import (
+    normalize_maxmin, num_templates_to_sample
+)
 
 
 logging.basicConfig(level=logging.INFO)
@@ -282,6 +285,102 @@ def search_subsequence(sequence, templates, templates_info, min_length, max_leng
     return len_best, d_min, label_best
 
 
+def helper_average_dtw_distance(sequences, warping_window, indices):
+    d_avg, _ = average_distance_to_templates(sequences[indices[0]], [[sequences[i] for i in indices[1:]]],
+                                             warping_window)
+    return d_avg
+
+
+def find_distance_thresholds(templates, templates_info, warping_window, max_num_samples=10000,
+                             upper_quantile=0.95, seed=1234):
+    """
+    For each action category, we find an upper threshold on the average DTW distance that will help filter out
+    segments of the time series that are bad matches.
+
+    To do this, we capture the empirical distribution of the average DTW distance between a template sequence and a
+    set of template sequences (from the same action). If there are `n` templates, first we find a smaller number `k`
+    of templates so that we can compute a sufficient number of average distance samples. If we consider one out of
+    the `n` templates, then we can select `k` templates from the remaining `n - 1` templates in `(n - 1)_C_k` ways.
+    The average DTW distance between the single template and the set of `k` templates can be calculated in each case.
+    This can be repeated `n` times by holding out a different template each time, giving a total of  `n (n - 1)_C_k`
+    average DTW distance values. If `n` is sufficiently large, we can get enough samples to capture the distribution
+    of the average DTW distance. The 95-th percentile of the distances is calculated as the upper threshold.
+
+    :param templates: see function `segment_repeat_sequences`.
+    :param templates_info: see function `segment_repeat_sequences`.
+    :param warping_window: see function `segment_repeat_sequences`.
+    :param max_num_samples: If `n` is larger than 13, the number of combinations can become very large. This sets an
+                            upper bound on the number of distance samples to be computed.
+    :param upper_quantile: Upper quantile used for the threshold calculation.
+    :param seed: Seed of the random number generator.
+
+    :return: (distance_thresholds, templates_selected, templates_info_selected)
+    - distance_thresholds: List of distance thresholds, one for each action.
+    - templates_selected: Same format as `templates`, but includes only `k` randomly selected templates per action.
+    - templates_info_selected: Same format as `templates_info`, but includes only `k` randomly selected templates
+                               per action.
+    """
+    np.random.seed(seed)
+    num_proc = max(1, multiprocessing.cpu_count() - 1)
+
+    templates_selected = []
+    templates_info_selected = []
+    distance_thresholds = []
+    num_templates = dict()
+    for i in range(len(templates)):
+        # number of templates for this action
+        n = len(templates[i])
+        if n in num_templates:
+            k, ns = num_templates[n]
+        else:
+            k, ns = num_templates_to_sample(n)
+            num_templates[n] = (k, ns)
+
+        logger.info("Selecting %d out of %d templates for matching action %d.", k, n, i + 1)
+        ind = np.random.permutation(n)[:k]
+        templates_selected.append([templates[i][j] for j in ind])
+        templates_info_selected.append([templates_info[i][j] for j in ind])
+
+        comb_list = list(combinations(range(n - 1), k))
+        len_comb_list = len(comb_list)
+        a = int(np.ceil(float(max_num_samples) / n))
+        if len_comb_list > a:
+            comb_list = [comb_list[j] for j in np.random.permutation(len_comb_list)[:a]]
+
+        if num_proc > 1:
+            index_list = []
+            for j in range(n):
+                # Every index excluding `j`
+                ind = [jj for jj in range(n) if jj != j]
+                index_list.extend([[j] + [ind[t] for t in tup] for tup in comb_list])
+
+            helper_partial = partial(helper_average_dtw_distance, templates[i], warping_window)
+            pool_obj = multiprocessing.Pool(processes=num_proc)
+            distances = []
+            _ = pool_obj.map_async(helper_partial, index_list, chunksize=None, callback=distances.extend)
+            pool_obj.close()
+            pool_obj.join()
+        else:
+            distances = []
+            for j in range(n):
+                # Every index excluding `j`
+                ind = [jj for jj in range(n) if jj != j]
+                distances.extend([
+                    helper_average_dtw_distance(templates[i], warping_window, [j] + [ind[t] for t in tup])
+                    for tup in comb_list
+                ])
+
+        distances = np.array(distances)
+        if distances.shape[0] < 100:
+            logger.warning("Sample size of distances (%d) may be too small for reliable threshold estimation.",
+                           distances.shape[0])
+
+        distance_thresholds.append(np.percentile(distances, 100 * upper_quantile))
+        logger.info("Average DTW distance threshold for action %d = %.6f", i + 1, distance_thresholds[-1])
+
+    return distance_thresholds, templates_selected, templates_info_selected
+
+
 def template_preprocessing(templates, alpha, normalize=True, normalization_type='z-score'):
     """
     Normalize the template sequences if required and save some information (length, minimum, and maximum) of each
@@ -379,8 +478,17 @@ def segment_repeat_sequences(data, templates, normalize=True, normalization_type
 
     logger.info("Length of the input sequence = %d. Dimension of the input sequence = %d.",
                 data.shape[0], data.shape[1])
+    # Normalize the template sequences
     templates_norm, templates_info, min_length, max_length = template_preprocessing(
         templates, alpha, normalize=normalize, normalization_type=normalization_type
+    )
+
+    # Calculate the distribution of average distances between templates from the same action. This will be used to
+    # find a threshold on the distance to eliminate bad sequence matches
+    logger.info("Calculating the upper threshold on the average DTW distance for each action based on the "
+                "given template sequences.")
+    distance_thresholds, templates_norm_selected, templates_info_selected = find_distance_thresholds(
+        templates_norm, templates_info, warping_window
     )
 
     # Starting from the left end of the sequence, find the subsequence with minimum average DTW distance from
@@ -391,9 +499,10 @@ def segment_repeat_sequences(data, templates, normalize=True, normalization_type
     data_rem = copy.copy(data)
     k = 1
     while data_rem.shape[0] > min_length:
-        m, d_min, label = search_subsequence(data_rem, templates_norm, templates_info, min_length, max_length,
-                                             normalize=normalize, normalization_type=normalization_type,
-                                             warping_window=warping_window)
+        m, d_min, label = search_subsequence(
+            data_rem, templates_norm_selected, templates_info_selected, min_length, max_length,
+            normalize=normalize, normalization_type=normalization_type, warping_window=warping_window
+        )
         data_segments.append(data_rem[:m, :])
         labels.append(label)
         data_rem = data_rem[m:, :]

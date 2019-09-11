@@ -1,4 +1,5 @@
 import numpy as np
+import scipy
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -75,3 +76,22 @@ def normalize_maxmin(x):
         y[:, mask] = (x[:, mask] - x_min[mask]) / (x_max[mask] - x_min[mask])
 
     return y
+
+
+def num_templates_to_sample(n):
+    """
+    Given `n` templates, what is the number of templates `k` to sample such that the term
+    n choose(n - 1, k) is maximized.
+
+    :param n: (int) number of templates.
+    :return:
+    """
+    k_max = 1
+    v_max = -np.inf
+    for k in range(1, n - 1):
+        v = n * scipy.special.comb(n - 1, k)
+        if v >= v_max:
+            v_max = v
+            k_max = k
+
+    return k_max, v_max
