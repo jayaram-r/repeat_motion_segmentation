@@ -292,7 +292,7 @@ def helper_average_dtw_distance(sequences, warping_window, indices):
 
 
 def find_distance_thresholds(templates, templates_info, warping_window, max_num_samples=10000,
-                             upper_quantile=0.95, seed=1234):
+                             upper_quantile=0.98, seed=1234):
     """
     For each action category, we find an upper threshold on the average DTW distance that will help filter out
     segments of the time series that are bad matches.
@@ -483,8 +483,6 @@ def segment_repeat_sequences(data, templates, normalize=True, normalization_type
         templates, alpha, normalize=normalize, normalization_type=normalization_type
     )
 
-    # Calculate the distribution of average distances between templates from the same action. This will be used to
-    # find a threshold on the distance to eliminate bad sequence matches
     logger.info("Calculating the upper threshold on the average DTW distance for each action based on the "
                 "given template sequences.")
     distance_thresholds, templates_norm_selected, templates_info_selected = find_distance_thresholds(
@@ -492,22 +490,54 @@ def segment_repeat_sequences(data, templates, normalize=True, normalization_type
     )
 
     # Starting from the left end of the sequence, find the subsequence with minimum average DTW distance from
-    # the templates. Repeat this iteratively to find the segments
+    # the templates. Repeat this iteratively to extract the segments
     logger.info("Search range for the subsequence length = [%d, %d].", min_length, max_length)
     data_segments = []
     labels = []
     data_rem = copy.copy(data)
-    k = 1
     while data_rem.shape[0] > min_length:
-        m, d_min, label = search_subsequence(
-            data_rem, templates_norm_selected, templates_info_selected, min_length, max_length,
-            normalize=normalize, normalization_type=normalization_type, warping_window=warping_window
-        )
-        data_segments.append(data_rem[:m, :])
-        labels.append(label)
-        data_rem = data_rem[m:, :]
-        logger.info("Length of subsequence %d = %d. Matched template label = %d. Average DTW distance to the "
-                    "matched templates = %.6f.", k, m, label, d_min)
-        k += 1
+        offset = 0
+        info_best = [0, 0, np.inf, 0]       # offset, sequence_length, avg_distance, label
+        match = False
+        while (data_rem.shape[0] - offset) > min_length:
+            m, d_avg, label = search_subsequence(
+                data_rem[offset:, :], templates_norm_selected, templates_info_selected, min_length, max_length,
+                normalize=normalize, normalization_type=normalization_type, warping_window=warping_window
+            )
+            if d_avg <= distance_thresholds[label - 1]:
+                if d_avg < info_best[2]:
+                    # Best matching subsequence so far
+                    match = True
+                    info_best = [offset, m, d_avg, label]
+
+            offset += 1
+            if match and (offset - info_best[0]) > 5:
+                # If a match has been found for a certain offset value, and a string of increasing values of
+                # the offset does not lead to a better match (lower average DTW), then we break in order to
+                # speed up the search. The choice of 5 is heuristic
+                break
+
+        if match:
+            offset, m, d_avg, label = info_best
+            if offset > 0:
+                # The segment prior to the offset does not match any action. Hence, its label is set to 0
+                data_segments.append(data_rem[:offset, :])
+                labels.append(0)
+
+            data_segments.append(data_rem[offset:(offset + m), :])
+            labels.append(label)
+            data_rem = data_rem[(offset + m):, :]
+            logger.info("Length of matched subsequence = %d. Matched template label = %d. Average DTW distance "
+                        "to the matched templates = %.6f.", m, label, d_min)
+        else:
+            # No matches could be found in this subsequence
+            data_segments.append(data_rem)
+            labels.append(0)
+            data_rem = np.zeros((0, data.shape[1]))
+            break
+
+    if data_rem.shape[0] > 0:
+        data_segments.append(data_rem)
+        labels.append(0)
 
     return data_segments, labels
