@@ -544,7 +544,7 @@ def segment_repeat_sequences(data, templates, normalize=True, normalization_type
             labels.append(label)
             data_rem = data_rem[(offset + m):, :]
             logger.info("Length of matched subsequence = %d. Matched template label = %d. Average DTW distance "
-                        "to the matched templates = %.6f.", m, label, d_min)
+                        "to the matched templates = %.6f.", m, label, d_avg)
         else:
             # No matches could be found in this subsequence
             data_segments.append(data_rem)
