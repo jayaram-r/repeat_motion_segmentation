@@ -32,6 +32,7 @@ def main():
 
     # The length of each repetition subsequence is picked at random from this interval
     length_range = [100, 125]
+    length_noise = [15, 25]
 
     # Generate a set of sequences to use as templates for this action
     num_templates = 10
@@ -47,11 +48,15 @@ def main():
 
     # Generate the data sequence
     data_sequence = []
-    for tp, num_repeat in [(0.25, 4), (0.5, 3), (1.0, 5), (2.0, 3)]:
+    for tp, num_repeat in [(0.25, 3), (0.5, 3), (1.0, 3), (2.0, 3)]:
         for _ in range(num_repeat):
             data_sequence.append(
                 generate_sequence(np.random.randint(length_range[0], high=length_range[1]), curve=curve, tp=tp)
             )
+            if np.random.rand() < 0.5:
+                # Append a noise sequence
+                m = np.random.randint(length_noise[0], high=length_noise[1])
+                data_sequence.append(0.01 * np.random.rand(m, 1))
 
     # Randomize the order of the sequences
     random.shuffle(data_sequence)
