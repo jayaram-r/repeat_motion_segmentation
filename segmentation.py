@@ -120,7 +120,8 @@ def average_distance_to_templates(sequence, templates, warping_window):
                 warping_window = get_warping_window(warping_window, len_seq, len_temp)
 
             if dim == 0:
-                # Disabling this call since it leads to errors with Cython code
+                # Faster DTW calculation using Cython only for 1d (scalar) sequences.
+                # Disabling this call since it leads to errors with Cython code.
                 d = (dtw.distance_fast(sequence[:, 0], temp[:, 0], window=warping_window)) / float(len_seq + len_temp)
             else:
                 d = (dtw_ndim.distance(sequence, temp, window=warping_window)) / float(len_seq + len_temp)
@@ -143,7 +144,8 @@ def helper_dtw_distance(sequence, templates, warping_window, index_tuple):
         warping_window = get_warping_window(warping_window, len_seq, len_temp)
 
     if sequence.shape[1] == 0:
-        # Disabling this call since it leads to errors with Cython code
+        # Faster DTW calculation using Cython only for 1d (scalar) sequences.
+        # Disabling this call since it leads to errors with Cython code.
         d = (dtw.distance_fast(sequence[:, 0], t[:, 0], window=warping_window)) / float(len_seq + len_temp)
     else:
         d = (dtw_ndim.distance(sequence, t, window=warping_window)) / float(len_seq + len_temp)
@@ -296,7 +298,7 @@ def helper_average_dtw_distance(sequences, warping_window, indices):
 
 
 def find_distance_thresholds(templates, templates_info, warping_window, max_num_samples=10000,
-                             upper_quantile=0.99, seed=1234):
+                             upper_quantile=1.0, seed=1234):
     """
     For each action category, we find an upper threshold on the average DTW distance that will help filter out
     segments of the time series that are bad matches.
@@ -323,7 +325,7 @@ def find_distance_thresholds(templates, templates_info, warping_window, max_num_
     n = 14, best k = 7, #samples = 24024
     n = 15, best k = 7, #samples = 51480
 
-    The 98-th percentile of the distances is calculated as the upper threshold.
+    The 99-th percentile of the distances is calculated as the upper threshold.
 
     :param templates: see function `segment_repeat_sequences`.
     :param templates_info: see function `segment_repeat_sequences`.
@@ -403,7 +405,7 @@ def find_distance_thresholds(templates, templates_info, warping_window, max_num_
     return distance_thresholds, templates_selected, templates_info_selected
 
 
-def template_preprocessing(templates, alpha, normalize=True, normalization_type='z-score'):
+def normalize_templates(templates, alpha, normalize=True, normalization_type='z-score'):
     """
     Normalize the template sequences if required and save some information (length, minimum, and maximum) of each
     of the template sequences.
@@ -461,15 +463,65 @@ def template_preprocessing(templates, alpha, normalize=True, normalization_type=
     return templates_norm, templates_info, int(min_length), int(max_length)
 
 
-def segment_repeat_sequences(data, templates, normalize=True, normalization_type='z-score',
-                             warping_window=None, alpha=0.75):
+def preprocess_templates(templates, normalize=True, normalization_type='z-score', warping_window=None, alpha=0.75):
     """
-    Segment the sequence `data` to closely match the sequences specified in the list `templates`.
+    Normalize the template sequences and calculate thresholds on the average DTW distance.
+
+    :param templates: list `[L_1, . . ., L_k]`, where each `L_i` is another list `L_i = [s_i1, . . ., s_im]`, and
+                      each `s_ij` is a numpy array (of shape (M, d)) corresponding to a template sequence.
+    :param normalize: see function `segment_repeat_sequences`.
+    :param normalization_type: see function `segment_repeat_sequences`.
+    :param warping_window: see function `segment_repeat_sequences`.
+    :param alpha: float value in the range `(0, 1)`, but recommended to be in the range `[0.5, 0.8]`. This value
+                  controls the search range for the subsequence length. If `m` is the median length of the template
+                  sequences, then the search range for the subsequences is obtained by uniform sampling of the
+                  interval `[alpha * m, (1 / alpha) * m]`. A smaller value of `alpha` increases the search interval
+                  of the subsequence length resulting in a higher search time, but also a more extensive search
+                  for the best match. On the other hand, a larger value of `alpha` (e.g. 0.8) will result in a
+                  faster but less extensive search.
+
+    :return: (templates_norm_selected, templates_info_selected, distance_thresholds, search_range)
+    - templates_norm_selected: list of selected normalized template sequences with the same format as `templates`.
+                               However, only `k` out of `n` templates are selected per action.
+    - templates_info_selected: list of namedtuples with information about the selected templates.
+    - distance_thresholds: list of distance thresholds, one for each action.
+    - search_range: tuple `(min_length, max_length)`, where
+        -- min_length: int value specifying the minimum length of the subsequence to be considered during matching.
+        -- max_length: int value specifying the maximum length of the subsequence to be considered during matching.
+
+    """
+    if normalization_type not in ('z-score', 'max-min'):
+        raise ValueError("Invalid value '{}' for the parameter 'normalization_type'.".format(normalization_type))
+
+    templates_norm, templates_info, min_length, max_length = normalize_templates(
+        templates, alpha, normalize=normalize, normalization_type=normalization_type
+    )
+
+    logger.info("Calculating the upper threshold on the average DTW distance for each action based on the "
+                "given template sequences.")
+    distance_thresholds, templates_norm_selected, templates_info_selected = find_distance_thresholds(
+        templates_norm, templates_info, warping_window
+    )
+    search_range = (min_length, max_length)
+
+    return templates_norm_selected, templates_info_selected, distance_thresholds, search_range
+
+
+def segment_repeat_sequences(data, templates_norm, templates_info, distance_thresholds, search_range,
+                             normalize=True, normalization_type='z-score', warping_window=None):
+    """
+    Segment the sequence `data` to closely match the sequences specified in the list `templates_norm`.
 
     :param data: numpy array of shape (N, d) with float values corresponding to the data sequence.
                  `N` is the number of points in the series and `d` is the dimension of each point in the series.
-    :param templates: list `[L_1, . . ., L_k]`, where each `L_i` is another list `L_i = [s_i1, . . ., s_im]`, and
-                      each `s_ij` is a numpy array (of shape (M, d)) corresponding to a template sequence.
+    :param templates_norm: list `[L_1, . . ., L_k]`, where each `L_i` is another list `L_i = [s_i1, . . ., s_im]`,
+                           and each `s_ij` is a numpy array (of shape (M, d)) corresponding to a template sequence.
+                           The template sequences are expected to be normalized.
+    :param templates_info: list of namedtuples with information about the templates in `templates_norm`.
+    :param distance_thresholds: list of float values with length equal to the number of the actions (i.e. length
+                                of `templates_norm`). Each value is an upper threshold on the average DTW distance
+                                corresponding to templates from a given action.
+    :param search_range: tuple `(min_length, max_length)` specifying the search range of the subsequence length.
     :param normalize: Apply normalization to the templates and the data subsequences, if set to True.
     :param normalization_type: Type of normalization to apply. Should be set to 'z-score' or 'max-min'.
     :param warping_window: Size of the warping window used to constrain the DTW matching path. This is also know as
@@ -481,40 +533,21 @@ def segment_repeat_sequences(data, templates, normalize=True, normalization_type
                            warping path to be flexible, while setting it to a small value (closer to 0) will constrain
                            the warping path to be closer to the diagonal. Note that a small value can also speed-up
                            the DTW calculation significantly.
-    :param alpha: float value in the range `(0, 1)`, but recommended to be in the range `[0.5, 0.8]`. This value
-                  controls the search range for the subsequence length. If `m` is the median length of the template
-                  sequences, then the search range for the subsequences is obtained by uniform sampling of the
-                  interval `[alpha * m, (1 / alpha) * m]`. A smaller value of `alpha` increases the search interval
-                  of the subsequence length resulting in a higher search time, but also a more extensive search
-                  for the best match. On the other hand, a larger value of `alpha` (e.g. 0.8) will result in a
-                  faster but less extensive search.
 
-    :return:
-        data_segments: list of segmented subsequences, each of which are numpy arrays of shape (m, d) (`m` can be
-                       different for each subsequence).
-        labels: list of best-matching template labels for the subsequences, where value `i` corresponds to the
-                templates in position `i - 1` of the input list `templates`. Label value `0` indicates that the
-                corresponding subsequence in `data_segments` could not be matched to any action.
+    :return: (data_segments, labels)
+        - data_segments: list of segmented subsequences, each of which are numpy arrays of shape (m, d) (`m` can be
+                         different for each subsequence).
+        - labels: list of best-matching template labels for the subsequences, where value `i` corresponds to the
+                  templates in position `i - 1` of the input list `templates`. Label value `0` indicates that the
+                  corresponding subsequence in `data_segments` could not be matched to any action.
     """
-    if normalization_type not in ('z-score', 'max-min'):
-        raise ValueError("Invalid value '{}' for the parameter 'normalization_type'.".format(normalization_type))
-
     logger.info("Length of the input sequence = %d. Dimension of the input sequence = %d.",
                 data.shape[0], data.shape[1])
-    # Normalize the template sequences
-    templates_norm, templates_info, min_length, max_length = template_preprocessing(
-        templates, alpha, normalize=normalize, normalization_type=normalization_type
-    )
-
-    logger.info("Calculating the upper threshold on the average DTW distance for each action based on the "
-                "given template sequences.")
-    distance_thresholds, templates_norm_selected, templates_info_selected = find_distance_thresholds(
-        templates_norm, templates_info, warping_window
-    )
-
-    # Starting from the left end of the sequence, find the subsequence with minimum average DTW distance from
-    # the templates. Repeat this iteratively to extract the segments
+    min_length, max_length = search_range
     logger.info("Search range for the subsequence length = [%d, %d].", min_length, max_length)
+
+    # Starting from the left end of the sequence, find the subsequences with minimum average DTW distance from
+    # the templates. Repeat this iteratively to extract the segments
     data_segments = []
     labels = []
     data_rem = copy.copy(data)
@@ -524,8 +557,8 @@ def segment_repeat_sequences(data, templates, normalize=True, normalization_type
         match = False
         while (data_rem.shape[0] - offset) > min_length:
             m, d_avg, label = search_subsequence(
-                data_rem[offset:, :], templates_norm_selected, templates_info_selected, min_length, max_length,
-                normalize=normalize, normalization_type=normalization_type, warping_window=warping_window
+                data_rem[offset:, :], templates_norm, templates_info, min_length, max_length, normalize=normalize,
+                normalization_type=normalization_type, warping_window=warping_window
             )
             if d_avg <= distance_thresholds[label - 1]:
                 if d_avg < info_best[2]:

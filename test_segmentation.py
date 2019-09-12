@@ -12,7 +12,10 @@ from repeat_motion_segmentation.utils import (
     gaussian_sequence,
     generate_sequence
 )
-from repeat_motion_segmentation.segmentation import segment_repeat_sequences
+from repeat_motion_segmentation.segmentation import (
+    segment_repeat_sequences,
+    preprocess_templates
+)
 
 
 logging.basicConfig(level=logging.INFO)
@@ -23,7 +26,7 @@ COLORS_LIST = ['grey', 'r', 'b', 'g', 'c', 'orange', 'm', 'lawngreen', 'gold', '
 
 
 def main():
-    np.random.seed(seed=173)
+    np.random.seed(seed=123)
     # Choose one of: 'sine', 'cosine', 'gaussian', 'gaussian_inverted'
     curve = 'sine'
 
@@ -55,14 +58,28 @@ def main():
 
     # Concatenate the repetition subsequences into one. The segmentation algorithm takes this sequence as input.
     data_sequence = np.concatenate(data_sequence)
+    warping_window = 0.25
+    alpha = 0.75
+
+    # Preprocess the template sequences and calculate the upper threshold on the average DTW distance corresponding
+    # to each action
+    t1 = time.time()
+    templates_norm, templates_info, distance_thresholds, search_range = preprocess_templates(
+        template_sequences, normalize=True, normalization_type='z-score', warping_window=warping_window, alpha=alpha
+    )
+    t2 = time.time()
+    logger.info("Time taken for preprocessing the templates = %.2f seconds", t2 - t1)
+    logger.info("")
 
     t1 = time.time()
-    # Perform segmentation of the concatenated sequence
-    data_segments, labels = segment_repeat_sequences(data_sequence, template_sequences,
-                                                     normalize=True, normalization_type='z-score',
-                                                     warping_window=0.25, alpha=0.75)
+    # Perform segmentation of the data sequence
+    data_segments, labels = segment_repeat_sequences(
+        data_sequence, templates_norm, templates_info, distance_thresholds, search_range, normalize=True,
+        normalization_type='z-score', warping_window=warping_window
+    )
     t2 = time.time()
     logger.info("Time taken for segmentation = %.2f seconds", t2 - t1)
+    logger.info("")
 
     # Plot the concatenated sequence and the result of the segmentation
     fig = plt.figure()
