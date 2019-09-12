@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # https://stackoverflow.com/a/37232760
-COLORS_LIST = ['r', 'b', 'g', 'c', 'orange', 'm', 'lawngreen', 'gold', 'grey', 'y', 'hotpink', 'blueviolet']
+COLORS_LIST = ['grey', 'r', 'b', 'g', 'c', 'orange', 'm', 'lawngreen', 'gold', 'y', 'hotpink', 'blueviolet']
 
 
 def main():
@@ -76,9 +76,9 @@ def main():
     ax1 = fig.add_subplot(2, 1, 2)
     st = 0
     nc = len(COLORS_LIST)
-    for j, seg in enumerate(data_segments):
+    for lab, seg in zip(labels, data_segments):
         en = st + seg.shape[0] - 1
-        ax1.plot(np.arange(st, en + 1), seg[:, 0], linestyle='--', color=COLORS_LIST[j % nc],
+        ax1.plot(np.arange(st, en + 1), seg[:, 0], linestyle='--', color=COLORS_LIST[lab % nc],
                  marker='.', markersize=4)
         st = en + 1
 

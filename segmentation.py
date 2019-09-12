@@ -14,7 +14,7 @@ import multiprocessing
 from functools import partial
 from scipy import stats
 from itertools import combinations
-from dtaidistance import dtw_ndim
+from dtaidistance import dtw, dtw_ndim
 import logging
 from repeat_motion_segmentation.utils import (
     normalize_maxmin, num_templates_to_sample
@@ -109,6 +109,7 @@ def average_lb_distance_to_templates2(sequence, templates, templates_info):
 
 def average_distance_to_templates(sequence, templates, warping_window):
     len_seq = sequence.shape[0]
+    dim = sequence.shape[1]
     val_min = np.inf
     label = 1
     for i, t in enumerate(templates, start=1):
@@ -121,7 +122,11 @@ def average_distance_to_templates(sequence, templates, warping_window):
                 # between the length of the sequences
                 warping_window = max(warping_window, abs(len_seq - len_temp + 1))
 
-            d = (dtw_ndim.distance(sequence, temp, window=warping_window)) / float(len_seq + len_temp)
+            if dim == 1:
+                d = (dtw.distance_fast(sequence[:, 0], temp[:, 0], window=warping_window)) / float(len_seq + len_temp)
+            else:
+                d = (dtw_ndim.distance(sequence, temp, window=warping_window)) / float(len_seq + len_temp)
+
             val += d
 
         val /= len(t)
@@ -142,7 +147,10 @@ def helper_dtw_distance(sequence, templates, warping_window, index_tuple):
         # between the length of the sequences
         warping_window = max(warping_window, abs(len_seq - len_temp + 1))
 
-    d = (dtw_ndim.distance(sequence, t, window=warping_window)) / float(len_seq + len_temp)
+    if sequence.shape[1] == 1:
+        d = (dtw.distance_fast(sequence[:, 0], t[:, 0], window=warping_window)) / float(len_seq + len_temp)
+    else:
+        d = (dtw_ndim.distance(sequence, t, window=warping_window)) / float(len_seq + len_temp)
 
     return index_tuple[0], index_tuple[1], d
 
@@ -292,7 +300,7 @@ def helper_average_dtw_distance(sequences, warping_window, indices):
 
 
 def find_distance_thresholds(templates, templates_info, warping_window, max_num_samples=10000,
-                             upper_quantile=0.98, seed=1234):
+                             upper_quantile=0.99, seed=1234):
     """
     For each action category, we find an upper threshold on the average DTW distance that will help filter out
     segments of the time series that are bad matches.
@@ -351,7 +359,8 @@ def find_distance_thresholds(templates, templates_info, warping_window, max_num_
             k, ns = num_templates_to_sample(n)
             num_templates[n] = (k, ns)
 
-        logger.info("Selecting %d out of %d templates for matching action %d.", k, n, i + 1)
+        logger.info("Action %d:", i + 1)
+        logger.info("Selecting %d out of %d templates for matching based on average DTW distance", k, n)
         ind = np.random.permutation(n)[:k]
         templates_selected.append([templates[i][j] for j in ind])
         templates_info_selected.append([templates_info[i][j] for j in ind])
@@ -391,7 +400,9 @@ def find_distance_thresholds(templates, templates_info, warping_window, max_num_
                            distances.shape[0])
 
         distance_thresholds.append(np.percentile(distances, 100 * upper_quantile))
-        logger.info("Average DTW distance threshold for action %d = %.6f", i + 1, distance_thresholds[-1])
+        logger.info("Upper threshold on distance DTW distance = %.6f", distance_thresholds[-1])
+        v = np.percentile(distances, [0, 50, 100])
+        logger.info("Min = %.6f, Median = %.6f, Max = %.6f", v[0], v[1], v[2])
 
     return distance_thresholds, templates_selected, templates_info_selected
 
@@ -424,7 +435,7 @@ def template_preprocessing(templates, alpha, normalize=True, normalization_type=
     templates_info = [[]] * num_actions
     for i in range(num_actions):
         num_templates = len(templates[i])
-        logger.info("Number of templates for action %d = %d.", i + 1, num_templates)
+        # logger.info("Number of templates for action %d = %d.", i + 1, num_templates)
         len_stats = np.percentile([a.shape[0] for a in templates[i]], [0, 50, 100])
         v = min(len_stats[0], max(2, np.floor(alpha * len_stats[1])))
         if v < min_length:
@@ -543,8 +554,8 @@ def segment_repeat_sequences(data, templates, normalize=True, normalization_type
             data_segments.append(data_rem[offset:(offset + m), :])
             labels.append(label)
             data_rem = data_rem[(offset + m):, :]
-            logger.info("Length of matched subsequence = %d. Matched template label = %d. Average DTW distance "
-                        "to the matched templates = %.6f.", m, label, d_avg)
+            logger.info("Length of matched subsequence = %d. Offset = %d. Matched template label = %d. "
+                        "Average DTW distance = %.6f.", m, offset, label, d_avg)
         else:
             # No matches could be found in this subsequence
             data_segments.append(data_rem)
