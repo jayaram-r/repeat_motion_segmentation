@@ -304,7 +304,22 @@ def find_distance_thresholds(templates, templates_info, warping_window, max_num_
     The average DTW distance between the single template and the set of `k` templates can be calculated in each case.
     This can be repeated `n` times by holding out a different template each time, giving a total of  `n (n - 1)_C_k`
     average DTW distance values. If `n` is sufficiently large, we can get enough samples to capture the distribution
-    of the average DTW distance. The 95-th percentile of the distances is calculated as the upper threshold.
+    of the average DTW distance. Listed below is a sequence of `n` and `k` values and the number of distance samples
+    it would produce:
+    n = 4, best k = 2, #samples = 12
+    n = 5, best k = 2, #samples = 30
+    n = 6, best k = 3, #samples = 60
+    n = 7, best k = 3, #samples = 140
+    n = 8, best k = 4, #samples = 280
+    n = 9, best k = 4, #samples = 630
+    n = 10, best k = 5, #samples = 1260
+    n = 11, best k = 5, #samples = 2772
+    n = 12, best k = 6, #samples = 5544
+    n = 13, best k = 6, #samples = 12012
+    n = 14, best k = 7, #samples = 24024
+    n = 15, best k = 7, #samples = 51480
+
+    The 98-th percentile of the distances is calculated as the upper threshold.
 
     :param templates: see function `segment_repeat_sequences`.
     :param templates_info: see function `segment_repeat_sequences`.
@@ -537,6 +552,7 @@ def segment_repeat_sequences(data, templates, normalize=True, normalization_type
             break
 
     if data_rem.shape[0] > 0:
+        # Any remaining unmatched segment
         data_segments.append(data_rem)
         labels.append(0)
 
