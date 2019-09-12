@@ -486,7 +486,8 @@ def segment_repeat_sequences(data, templates, normalize=True, normalization_type
         data_segments: list of segmented subsequences, each of which are numpy arrays of shape (m, d) (`m` can be
                        different for each subsequence).
         labels: list of best-matching template labels for the subsequences, where value `i` corresponds to the
-                templates in position `i - 1` of the input list `templates`.
+                templates in position `i - 1` of the input list `templates`. Label value `0` indicates that the
+                corresponding subsequence in `data_segments` could not be matched to any action.
     """
     if normalization_type not in ('z-score', 'max-min'):
         raise ValueError("Invalid value '{}' for the parameter 'normalization_type'.".format(normalization_type))

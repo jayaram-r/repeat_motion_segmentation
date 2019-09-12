@@ -31,7 +31,7 @@ def main():
     length_range = [100, 125]
 
     # Generate a set of sequences to use as templates for this action
-    num_templates = 5
+    num_templates = 10
     template_sequences = []
     for tp in [1.0, 0.5, 0.25, 2.0]:
         a = []
