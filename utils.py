@@ -78,6 +78,18 @@ def normalize_maxmin(x):
     return y
 
 
+def get_warping_window(w, l1, l2):
+    warping_window = int(np.ceil(w * max(l1, l2)))
+    # If the sequences have different lengths, the warping window cannot be smaller than the difference
+    # between the length of the sequences
+    warping_window = max(warping_window, abs(l1 - l2) + 1)
+
+    # Converting to int32 to avoid overflow errors with Cython
+    # return np.dtype('int32').type(warping_window)
+
+    return warping_window
+
+
 def num_templates_to_sample(n):
     """
     Given `n` templates, what is the number of templates `k` to sample such that the term

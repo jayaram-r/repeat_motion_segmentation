@@ -17,7 +17,7 @@ from itertools import combinations
 from dtaidistance import dtw, dtw_ndim
 import logging
 from repeat_motion_segmentation.utils import (
-    normalize_maxmin, num_templates_to_sample
+    normalize_maxmin, num_templates_to_sample, get_warping_window
 )
 
 
@@ -117,12 +117,10 @@ def average_distance_to_templates(sequence, templates, warping_window):
         for temp in t:
             len_temp = temp.shape[0]
             if warping_window is not None:
-                warping_window = int(np.ceil(warping_window * max(len_seq, len_temp)))
-                # If the sequences have different lengths, the warping window cannot be smaller than the difference
-                # between the length of the sequences
-                warping_window = max(warping_window, abs(len_seq - len_temp + 1))
+                warping_window = get_warping_window(warping_window, len_seq, len_temp)
 
-            if dim == 1:
+            if dim == 0:
+                # Disabling this call since it leads to errors with Cython code
                 d = (dtw.distance_fast(sequence[:, 0], temp[:, 0], window=warping_window)) / float(len_seq + len_temp)
             else:
                 d = (dtw_ndim.distance(sequence, temp, window=warping_window)) / float(len_seq + len_temp)
@@ -142,12 +140,10 @@ def helper_dtw_distance(sequence, templates, warping_window, index_tuple):
     len_seq = sequence.shape[0]
     len_temp = t.shape[0]
     if warping_window is not None:
-        warping_window = int(np.ceil(warping_window * max(len_seq, len_temp)))
-        # If the sequences have different lengths, the warping window cannot be smaller than the difference
-        # between the length of the sequences
-        warping_window = max(warping_window, abs(len_seq - len_temp + 1))
+        warping_window = get_warping_window(warping_window, len_seq, len_temp)
 
-    if sequence.shape[1] == 1:
+    if sequence.shape[1] == 0:
+        # Disabling this call since it leads to errors with Cython code
         d = (dtw.distance_fast(sequence[:, 0], t[:, 0], window=warping_window)) / float(len_seq + len_temp)
     else:
         d = (dtw_ndim.distance(sequence, t, window=warping_window)) / float(len_seq + len_temp)
