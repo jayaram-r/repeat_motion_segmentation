@@ -11,6 +11,7 @@ import numpy as np
 import copy
 from collections import namedtuple
 import multiprocessing
+import pickle
 from functools import partial
 from scipy import stats
 from itertools import combinations
@@ -471,7 +472,8 @@ def normalize_templates(templates, alpha, normalize=True, normalization_type='z-
     return templates_norm, templates_info, length_stats
 
 
-def preprocess_templates(templates, normalize=True, normalization_type='z-score', warping_window=None, alpha=0.75):
+def preprocess_templates(templates, normalize=True, normalization_type='z-score', warping_window=None, alpha=0.75,
+                         templates_results_file=None):
     """
     Normalize the template sequences and calculate thresholds on the average DTW distance.
 
@@ -487,12 +489,16 @@ def preprocess_templates(templates, normalize=True, normalization_type='z-score'
                   of the subsequence length resulting in a higher search time, but also a more extensive search
                   for the best match. On the other hand, a larger value of `alpha` (e.g. 0.8) will result in a
                   faster but less extensive search.
+    :param templates_results_file: Filename for the pickle file in which the processed template results will be
+                                   saved. This can be used to avoid processing the templates (which can be time
+                                   consuming) repeatedly on multiple runs.
 
-    :return: (templates_norm_selected, templates_info_selected, distance_thresholds, length_stats)
-    - templates_norm_selected: list of selected normalized template sequences with the same format as `templates`.
-                               However, only `k` out of `n` templates are selected per action.
-    - templates_info_selected: list of namedtuples with information about the selected templates.
-    - distance_thresholds: list of distance thresholds, one for each action.
+    :return results: A dict with the following items:
+    {'templates_normalized', 'templates_info', 'distance_thresholds', 'length_stats'}
+    - templates_normalized: list of selected normalized template sequences with the same format as the input
+                            `templates`. Only `k` out of `n` templates are selected per action.
+    - templates_info: list of namedtuples with information about the selected templates.
+    - distance_thresholds: list of upper thresholds on the average DTW distance, one for each action.
     - length_stats: see function `normalize_templates`.
     """
     if normalization_type not in ('z-score', 'max-min'):
@@ -508,7 +514,18 @@ def preprocess_templates(templates, normalize=True, normalization_type='z-score'
         templates_norm, templates_info, warping_window
     )
 
-    return templates_norm_selected, templates_info_selected, distance_thresholds, length_stats
+    results = {
+        'templates_normalized': templates_norm_selected,
+        'templates_info': templates_info_selected,
+        'distance_thresholds': distance_thresholds,
+        'length_stats': length_stats
+    }
+    if templates_results_file:
+        logger.info("Preprocessed template results have been saved to the file: %s", templates_results_file)
+        with open(templates_results_file, 'wb') as fp:
+            pickle.dump(results, fp)
+
+    return results
 
 
 def segment_repeat_sequences(data, templates_norm, templates_info, distance_thresholds, length_stats,

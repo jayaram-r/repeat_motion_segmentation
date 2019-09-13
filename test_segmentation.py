@@ -2,8 +2,10 @@
 Segmenting a time series with multiple repetitions of a given action.
 """
 import numpy as np
+import os
 import time
 import random
+import pickle
 import logging
 import matplotlib
 matplotlib.use('Agg')
@@ -26,7 +28,7 @@ COLORS_LIST = ['grey', 'r', 'b', 'g', 'c', 'orange', 'm', 'lawngreen', 'gold', '
 
 
 def main():
-    np.random.seed(seed=123)
+    np.random.seed(seed=1234)
     # Choose one of: 'sine', 'cosine', 'gaussian', 'gaussian_inverted'
     curve = 'sine'
 
@@ -67,20 +69,30 @@ def main():
     alpha = 0.75
 
     # Preprocess the template sequences and calculate the upper threshold on the average DTW distance corresponding
-    # to each action
-    t1 = time.time()
-    templates_norm, templates_info, distance_thresholds, length_stats = preprocess_templates(
-        template_sequences, normalize=True, normalization_type='z-score', warping_window=warping_window, alpha=alpha
-    )
-    t2 = time.time()
-    logger.info("Time taken for preprocessing the templates = %.2f seconds", t2 - t1)
-    logger.info("")
+    # to each action.
+    # Results of the template preprocessing are saved in a Pickle file that can be loaded and reused directly
+    # on subsequent runs
+    results_file = os.path.join(os.getcwd(), 'template_results.pkl')
+    results = None
+    if os.path.isfile(results_file):
+        with open(results_file, 'rb') as fp:
+            results = pickle.load(fp)
+
+    if results is None:
+        t1 = time.time()
+        results = preprocess_templates(
+            template_sequences, normalize=True, normalization_type='z-score', warping_window=warping_window,
+            alpha=alpha, templates_results_file=results_file
+        )
+        t2 = time.time()
+        logger.info("Time taken for preprocessing the templates = %.2f seconds", t2 - t1)
+        logger.info("")
 
     t1 = time.time()
     # Perform segmentation of the data sequence
     data_segments, labels = segment_repeat_sequences(
-        data_sequence, templates_norm, templates_info, distance_thresholds, length_stats, normalize=True,
-        normalization_type='z-score', warping_window=warping_window
+        data_sequence, results['templates_normalized'], results['templates_info'], results['distance_thresholds'],
+        results['length_stats'], normalize=True, normalization_type='z-score', warping_window=warping_window
     )
     t2 = time.time()
     logger.info("Time taken for segmentation = %.2f seconds", t2 - t1)
