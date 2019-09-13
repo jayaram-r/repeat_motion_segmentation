@@ -25,6 +25,8 @@ from repeat_motion_segmentation.utils import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+template_info_tuple = namedtuple('template_info_tuple', ['length', 'min', 'max', 'first_value', 'last_value'])
+
 
 def average_lb_distance_to_templates1(sequence, templates_info):
     """
@@ -426,7 +428,6 @@ def normalize_templates(templates, alpha, normalize=True, normalization_type='z-
     """
     num_actions = len(templates)
     logger.info("Number of actions defined by the templates = %d.", num_actions)
-    info_tuple = namedtuple('info_tuple', ['length', 'min', 'max', 'first_value', 'last_value'])
     if normalize:
         logger.info("Applying '%s' normalization to the template sequences.", normalization_type)
 
@@ -462,7 +463,7 @@ def normalize_templates(templates, alpha, normalize=True, normalization_type='z-
                 arr = templates[i][j]
 
             templates_norm[i][j] = arr
-            templates_info[i][j] = info_tuple(
+            templates_info[i][j] = template_info_tuple(
                 length=arr.shape[0], min=np.min(arr, axis=0), max=np.max(arr, axis=0),
                 first_value=arr[0, :], last_value=arr[-1, :]
             )

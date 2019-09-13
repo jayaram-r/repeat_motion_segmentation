@@ -16,7 +16,8 @@ from repeat_motion_segmentation.utils import (
 )
 from repeat_motion_segmentation.segmentation import (
     segment_repeat_sequences,
-    preprocess_templates
+    preprocess_templates,
+    template_info_tuple
 )
 
 
@@ -86,8 +87,10 @@ def main():
         )
         t2 = time.time()
         logger.info("Time taken for preprocessing the templates = %.2f seconds", t2 - t1)
-        logger.info("")
+    else:
+        logger.info("Loading preprocessed template results from the file: %s", results_file)
 
+    logger.info("")
     t1 = time.time()
     # Perform segmentation of the data sequence
     data_segments, labels = segment_repeat_sequences(
