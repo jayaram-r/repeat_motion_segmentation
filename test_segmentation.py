@@ -32,7 +32,7 @@ def main():
 
     # The length of each repetition subsequence is picked at random from this interval
     length_range = [100, 125]
-    length_noise = [15, 25]
+    length_range_noise = [15, 25]
 
     # Generate a set of sequences to use as templates for this action
     num_templates = 10
@@ -55,7 +55,7 @@ def main():
             )
             if np.random.rand() < 0.5:
                 # Append a noise sequence
-                m = np.random.randint(length_noise[0], high=length_noise[1])
+                m = np.random.randint(length_range_noise[0], high=length_range_noise[1])
                 data_sequence.append(0.01 * np.random.rand(m, 1))
 
     # Randomize the order of the sequences
@@ -69,7 +69,7 @@ def main():
     # Preprocess the template sequences and calculate the upper threshold on the average DTW distance corresponding
     # to each action
     t1 = time.time()
-    templates_norm, templates_info, distance_thresholds, search_range = preprocess_templates(
+    templates_norm, templates_info, distance_thresholds, length_stats = preprocess_templates(
         template_sequences, normalize=True, normalization_type='z-score', warping_window=warping_window, alpha=alpha
     )
     t2 = time.time()
@@ -79,7 +79,7 @@ def main():
     t1 = time.time()
     # Perform segmentation of the data sequence
     data_segments, labels = segment_repeat_sequences(
-        data_sequence, templates_norm, templates_info, distance_thresholds, search_range, normalize=True,
+        data_sequence, templates_norm, templates_info, distance_thresholds, length_stats, normalize=True,
         normalization_type='z-score', warping_window=warping_window
     )
     t2 = time.time()
