@@ -573,6 +573,7 @@ def segment_repeat_sequences(data, templates_norm, templates_info, distance_thre
     # the templates. Repeat this iteratively to extract the segments
     data_segments = []
     labels = []
+    num_seg = 0
     data_rem = copy.copy(data)
     while data_rem.shape[0] > min_length:
         offset = 0
@@ -590,6 +591,7 @@ def segment_repeat_sequences(data, templates_norm, templates_info, distance_thre
                     info_best = [offset, m, d_avg, label]
 
             offset += 1
+            logger.info("offset = %d, match = %d", offset, int(match))
             if match and (offset - info_best[0]) > 5:
                 # If a match has been found for a certain offset value, and a string of increasing values of
                 # the offset does not lead to a better match (lower average DTW), then we break in order to
@@ -597,6 +599,7 @@ def segment_repeat_sequences(data, templates_norm, templates_info, distance_thre
                 break
 
         if match:
+            num_seg += 1
             offset, m, d_avg, label = info_best
             if offset > 0:
                 # The segment prior to the offset does not match any action. Hence, its label is set to 0
@@ -606,8 +609,8 @@ def segment_repeat_sequences(data, templates_norm, templates_info, distance_thre
             data_segments.append(data_rem[offset:(offset + m), :])
             labels.append(label)
             data_rem = data_rem[(offset + m):, :]
-            logger.info("Length of matched subsequence = %d. Offset = %d. Matched template label = %d. "
-                        "Average DTW distance = %.6f.", m, offset, label, d_avg)
+            logger.info("Segment %d: Length of matched segment = %d, Offset = %d, Matched template label = %d, "
+                        "Average DTW distance = %.6f.", num_seg, m, offset, label, d_avg)
         else:
             # No matches could be found in this subsequence
             data_segments.append(data_rem)
