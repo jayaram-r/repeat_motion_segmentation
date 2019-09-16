@@ -15,7 +15,8 @@ import pickle
 from functools import partial
 from scipy import stats
 from itertools import combinations
-from dtaidistance import dtw, dtw_ndim
+from tslearn.metrics import njit_dtw
+from tslearn.utils import to_time_series
 import logging
 from repeat_motion_segmentation.utils import (
     normalize_maxmin, num_templates_to_sample, get_warping_window
@@ -111,24 +112,24 @@ def average_lb_distance_to_templates2(sequence, templates, templates_info):
 
 
 def average_distance_to_templates(sequence, templates, warping_window):
+    sequence = to_time_series(sequence, remove_nans=True)
     len_seq = sequence.shape[0]
-    dim = sequence.shape[1]
     val_min = np.inf
     label = 1
     for i, t in enumerate(templates, start=1):
         val = 0.0
         for temp in t:
             len_temp = temp.shape[0]
-            if warping_window is not None:
-                warping_window = get_warping_window(warping_window, len_seq, len_temp)
-
-            if dim == 0:
-                # Faster DTW calculation using Cython only for 1d (scalar) sequences.
-                # Disabling this call since it leads to errors with Cython code.
-                d = (dtw.distance_fast(sequence[:, 0], temp[:, 0], window=warping_window)) / float(len_seq + len_temp)
+            if warping_window is None:
+                mask = np.zeros((len_seq, len_temp))
             else:
-                d = (dtw_ndim.distance(sequence, temp, window=warping_window)) / float(len_seq + len_temp)
+                warping_window = get_warping_window(warping_window, len_seq, len_temp)
+                mask = np.full((len_seq, len_temp), np.inf)
+                ind_diff = np.abs(np.arange(len_seq)[:, np.newaxis] * np.ones((1, len_temp)) -
+                                  np.ones((len_seq, 1)) * np.arange(len_temp)[np.newaxis, :])
+                mask[ind_diff <= warping_window] = 0
 
+            d = njit_dtw(sequence, to_time_series(temp, remove_nans=True), mask=mask) / float(len_seq + len_temp)
             val += d
 
         val /= len(t)
@@ -143,15 +144,18 @@ def helper_dtw_distance(sequence, templates, warping_window, index_tuple):
     t = templates[index_tuple[0]][index_tuple[1]]
     len_seq = sequence.shape[0]
     len_temp = t.shape[0]
-    if warping_window is not None:
-        warping_window = get_warping_window(warping_window, len_seq, len_temp)
 
-    if sequence.shape[1] == 0:
-        # Faster DTW calculation using Cython only for 1d (scalar) sequences.
-        # Disabling this call since it leads to errors with Cython code.
-        d = (dtw.distance_fast(sequence[:, 0], t[:, 0], window=warping_window)) / float(len_seq + len_temp)
+    if warping_window is None:
+        mask = np.zeros((len_seq, len_temp))
     else:
-        d = (dtw_ndim.distance(sequence, t, window=warping_window)) / float(len_seq + len_temp)
+        warping_window = get_warping_window(warping_window, len_seq, len_temp)
+        mask = np.full((len_seq, len_temp), np.inf)
+        ind_diff = np.abs(np.arange(len_seq)[:, np.newaxis] * np.ones((1, len_temp)) -
+                          np.ones((len_seq, 1)) * np.arange(len_temp)[np.newaxis, :])
+        mask[ind_diff <= warping_window] = 0
+
+    d = (njit_dtw(to_time_series(sequence, remove_nans=True), to_time_series(t, remove_nans=True), mask=mask) /
+         float(len_seq + len_temp))
 
     return index_tuple[0], index_tuple[1], d
 
@@ -609,8 +613,8 @@ def segment_repeat_sequences(data, templates_norm, templates_info, distance_thre
             data_segments.append(data_rem[offset:(offset + m), :])
             labels.append(label)
             data_rem = data_rem[(offset + m):, :]
-            logger.info("Segment %d: Length of matched segment = %d, Offset = %d, Matched template label = %d, "
-                        "Average DTW distance = %.6f.", num_seg, m, offset, label, d_avg)
+            logger.info("Segment %d: Length of matched segment = %d, offset = %d, matched template label = %d, "
+                        "average DTW distance = %.6f.", num_seg, m, offset, label, d_avg)
         else:
             # No matches could be found in this subsequence
             data_segments.append(data_rem)
