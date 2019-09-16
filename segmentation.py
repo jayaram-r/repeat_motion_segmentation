@@ -308,8 +308,7 @@ def helper_average_dtw_distance(sequences, warping_window, indices):
     return d_avg
 
 
-def find_distance_thresholds(templates, templates_info, warping_window, max_num_samples=10000,
-                             upper_quantile=1.0, seed=1234):
+def find_distance_thresholds(templates, templates_info, warping_window, max_num_samples=10000, seed=1234):
     """
     For each action category, we find an upper threshold on the average DTW distance that will help filter out
     segments of the time series that are bad matches.
@@ -343,7 +342,6 @@ def find_distance_thresholds(templates, templates_info, warping_window, max_num_
     :param warping_window: see function `segment_repeat_sequences`.
     :param max_num_samples: If `n` is larger than 13, the number of combinations can become very large. This sets an
                             upper bound on the number of distance samples to be computed.
-    :param upper_quantile: Upper quantile used for the threshold calculation.
     :param seed: Seed of the random number generator.
 
     :return: (distance_thresholds, templates_selected, templates_info_selected)
@@ -408,10 +406,12 @@ def find_distance_thresholds(templates, templates_info, warping_window, max_num_
             logger.warning("Sample size of distances (%d) may be too small for reliable threshold estimation.",
                            distances.shape[0])
 
-        distance_thresholds.append(np.percentile(distances, 100 * upper_quantile))
+        # Using the 1.5 IQR rule for the upper threshold on distances
+        v = np.percentile(distances, [0, 25, 50, 75, 100])
+        th = max(v[4], v[3] + 1.5 * (v[3] - v[1]))
+        distance_thresholds.append(th)
         logger.info("Upper threshold on distance DTW distance = %.6f", distance_thresholds[-1])
-        v = np.percentile(distances, [0, 50, 100])
-        logger.info("Min = %.6f, Median = %.6f, Max = %.6f", v[0], v[1], v[2])
+        # logger.info("Min = %.6f, Median = %.6f, Max = %.6f", v[0], v[2], v[4])
 
     return distance_thresholds, templates_selected, templates_info_selected
 
@@ -600,7 +600,7 @@ def segment_repeat_sequences(data, templates_norm, templates_info, distance_thre
 
             offset += 1
             logger.info("offset = %d, match = %d", offset, int(match))
-            if match and (offset - info_best[0]) > 5:
+            if match and (offset - info_best[0]) >= 10:
                 # If a match has been found for a certain offset value, and a string of increasing values of
                 # the offset does not lead to a better match (lower average DTW), then we break in order to
                 # speed up the search. The choice of 5 is heuristic
