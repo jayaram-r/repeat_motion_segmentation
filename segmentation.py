@@ -123,11 +123,11 @@ def average_distance_to_templates(sequence, templates, warping_window):
             if warping_window is None:
                 mask = np.zeros((len_seq, len_temp))
             else:
-                warping_window = get_warping_window(warping_window, len_seq, len_temp)
+                w = get_warping_window(warping_window, len_seq, len_temp)
                 mask = np.full((len_seq, len_temp), np.inf)
                 ind_diff = np.abs(np.arange(len_seq)[:, np.newaxis] * np.ones((1, len_temp)) -
                                   np.ones((len_seq, 1)) * np.arange(len_temp)[np.newaxis, :])
-                mask[ind_diff <= warping_window] = 0
+                mask[ind_diff <= w] = 0
 
             d = njit_dtw(sequence, to_time_series(temp, remove_nans=True), mask=mask) / float(len_seq + len_temp)
             val += d
@@ -148,11 +148,11 @@ def helper_dtw_distance(sequence, templates, warping_window, index_tuple):
     if warping_window is None:
         mask = np.zeros((len_seq, len_temp))
     else:
-        warping_window = get_warping_window(warping_window, len_seq, len_temp)
+        w = get_warping_window(warping_window, len_seq, len_temp)
         mask = np.full((len_seq, len_temp), np.inf)
         ind_diff = np.abs(np.arange(len_seq)[:, np.newaxis] * np.ones((1, len_temp)) -
                           np.ones((len_seq, 1)) * np.arange(len_temp)[np.newaxis, :])
-        mask[ind_diff <= warping_window] = 0
+        mask[ind_diff <= w] = 0
 
     d = (njit_dtw(to_time_series(sequence, remove_nans=True), to_time_series(t, remove_nans=True), mask=mask) /
          float(len_seq + len_temp))
@@ -231,7 +231,11 @@ def search_subsequence(sequence, templates, templates_info, min_length, max_leng
     """
     N = sequence.shape[0]
     max_length = min(N, max_length)
-    num_proc = max(1, multiprocessing.cpu_count() - 1)
+    # Setting `num_proc = 1` because the function `njit_dtw` uses `numba`, which runs very slowly when run in
+    # parallel using multiprocessing. This could be because `numba` performs the just-in-time compilation during the
+    # first run, which makes all the processes run slowly the first time.
+    # num_proc = max(1, multiprocessing.cpu_count() - 1)
+    num_proc = 1
     if num_proc > 1:
         parallel = True
     else:
