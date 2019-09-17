@@ -599,12 +599,16 @@ def segment_repeat_sequences(data, templates_norm, templates_info, distance_thre
                     info_best = [offset, m, d_avg, label]
 
             offset += 1
-            logger.info("offset = %d, match = %d", offset, int(match))
-            if match and (offset - info_best[0]) >= 10:
-                # If a match has been found for a certain offset value, and a string of increasing values of
-                # the offset does not lead to a better match (lower average DTW), then we break in order to
-                # speed up the search. The choice of 5 is heuristic
-                break
+            # logger.info("offset = %d, match = %d", offset, int(match))
+            if match:
+                # Terminate if either of the conditions below is satisfied:
+                # 1. Offset exceeds the last index of the best subsequence found so far.
+                # 2. If a match has been found for a certain offset value, and a string of increasing values of
+                #    the offset does not lead to a better match (lower average DTW), then we break in order to
+                #    speed up the search. The choice of 10 is heuristic.
+                #
+                if (offset - info_best[0]) > 10 or (offset - info_best[0]) >= (info_best[1] - 1):
+                    break
 
         if match:
             num_seg += 1
