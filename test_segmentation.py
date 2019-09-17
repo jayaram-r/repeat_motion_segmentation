@@ -35,7 +35,7 @@ def main():
 
     # The length of each repetition subsequence is picked at random from this interval
     length_range = [100, 125]
-    length_range_noise = [15, 25]
+    length_range_noise = [20, 30]
 
     # Generate a set of sequences to use as templates for this action
     num_templates = 10

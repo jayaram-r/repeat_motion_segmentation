@@ -226,8 +226,11 @@ def search_subsequence(sequence, templates, templates_info, min_length, max_leng
                            the DTW calculation significantly.
     :param use_lower_bounds: Set to `True` to use the lower bounds of the DTW. This will speed up the search.
 
-    :return: tuple (a, b, c), where `a` is the best subsequence length, `b` is the minimum average DTW distance,
-             and `c` is the label of the best-matching template.
+    :return: tuple `(len_best, d_min, label_best)`, where
+             -- `len_best` is the best subsequence length,
+             -- `d_min` is the minimum average DTW distance between the subsequence and the templates from
+                 the matched action,
+             -- `label_best` is the label of the best-matching template.
     """
     N = sequence.shape[0]
     max_length = min(N, max_length)
@@ -262,20 +265,16 @@ def search_subsequence(sequence, templates, templates_info, min_length, max_leng
             sequence_min = np.minimum.accumulate(sequence, axis=0)
             sequence_max = np.maximum.accumulate(sequence, axis=0)
 
-    # Calculate the minimum average DTW distance to the templates for the average subsequence length
-    # (between `min_length` and `max_length`). This gives a good reference value for distance-based pruning.
-    len_best = int(np.round(0.5 * (min_length + max_length)))
-    sequence_norm = normalize_subsequence(sequence, len_best, sequence_mean, sequence_stdev, sequence_min,
-                                          sequence_max, normalize, normalization_type)
-    if parallel:
-        d_min, label_best = average_distance_to_templates_parallel(sequence_norm, templates, warping_window,
-                                                                   num_proc)
-    else:
-        d_min, label_best = average_distance_to_templates(sequence_norm, templates, warping_window)
+    # The middle value between `min_length` and `max_length` is used as the first value in the search range.
+    # The rest of the values are randomized in order to take advantage of the lower bound based pruning
+    mid_length = int(np.round(0.5 * (min_length + max_length)))
+    length_range = set(range(min_length, max_length + 1)) - {mid_length}
+    length_range = np.insert(np.random.permutation(list(length_range)), 0, mid_length)
 
-    search_set = set(range(min_length, max_length + 1)) - {len_best}
-    search_set = np.random.permutation(list(search_set))
-    for m in search_set:
+    len_best = mid_length
+    label_best = 0
+    d_min = np.inf
+    for m in length_range:
         sequence_norm = normalize_subsequence(sequence, m, sequence_mean, sequence_stdev, sequence_min,
                                               sequence_max, normalize, normalization_type)
         if use_lower_bounds:
@@ -596,8 +595,20 @@ def segment_repeat_sequences(data, templates_norm, templates_info, distance_thre
                 normalization_type=normalization_type, warping_window=warping_window
             )
             if d_avg <= distance_thresholds[label - 1]:
-                if d_avg < info_best[2]:
-                    # Best matching subsequence so far
+                if match:
+                    if label == info_best[3]:
+                        # Same label as the current best match
+                        if d_avg < info_best[2]:
+                            # Lower average DTW distance than the current best match
+                            # match = True
+                            info_best = [offset, m, d_avg, label]
+
+                    else:
+                        # Different label from the current best match. In this case, we retain the current best
+                        # match and break out of the loop
+                        break
+                else:
+                    # First matching subsequence
                     match = True
                     info_best = [offset, m, d_avg, label]
 
