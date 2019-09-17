@@ -231,6 +231,9 @@ def search_subsequence(sequence, templates, templates_info, min_length, max_leng
     """
     N = sequence.shape[0]
     max_length = min(N, max_length)
+    if min_length >= max_length:
+        min_length = max(1, max_length - 1)
+
     # Setting `num_proc = 1` because the function `njit_dtw` uses `numba`, which runs very slowly when run in
     # parallel using multiprocessing. This could be because `numba` performs the just-in-time compilation during the
     # first run, which makes all the processes run slowly the first time.
