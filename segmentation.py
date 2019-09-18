@@ -15,6 +15,7 @@ import pickle
 from functools import partial
 from scipy import stats
 from itertools import combinations
+from numba import jit
 from tslearn.metrics import njit_dtw
 from tslearn.utils import to_time_series
 import logging
@@ -29,6 +30,7 @@ logger = logging.getLogger(__name__)
 template_info_tuple = namedtuple('template_info_tuple', ['length', 'min', 'max', 'first_value', 'last_value'])
 
 
+# @jit(nopython=True)
 def average_lb_distance_to_templates1(sequence, templates_info):
     """
     Simple but fast lower bound to the DTW based on comparison of only the first and last values of the sequence
@@ -111,6 +113,7 @@ def average_lb_distance_to_templates2(sequence, templates, templates_info):
     return val_min
 
 
+# @jit(nopython=True)
 def average_distance_to_templates(sequence, templates, warping_window):
     sequence = to_time_series(sequence, remove_nans=True)
     len_seq = sequence.shape[0]
