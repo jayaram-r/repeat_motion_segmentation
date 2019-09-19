@@ -4,6 +4,9 @@ Segmenting a time series with multiple repetitions from a given set of actions.
 Dynamic time warping (DTW) implementation from the `tslearn` library is used. It supports multivariate time series
 and has fast a implementation based on numba.
 
+https://tslearn.readthedocs.io/en/latest/index.html
+https://github.com/rtavenar/tslearn
+
 """
 import numpy as np
 import copy
