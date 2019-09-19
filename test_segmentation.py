@@ -101,28 +101,45 @@ def main():
     logger.info("Time taken for segmentation = %.2f seconds", t2 - t1)
     logger.info("")
 
-    # Plot the concatenated sequence and the result of the segmentation
+    # Plot the original sequence
+    dim = data_sequence.shape[1]
     fig = plt.figure()
-    ax1 = fig.add_subplot(2, 1, 1)
-    ax1.plot(np.arange(data_sequence.shape[0]), data_sequence[:, 0], linestyle='--', color='r',
-             marker='.', markersize=4)
-    # ax1.set_xlabel("index", fontsize=10, fontweight='bold')
-    ax1.set_ylabel("value", fontsize=10, fontweight='bold')
-    ax1.set_title('Segmentation using DTW matching', fontsize=10, fontweight='bold')
+    index_vals = np.arange(data_sequence.shape[0])
+    for j in range(dim):
+        ax1 = fig.add_subplot(dim, 1, j + 1)
+        ax1.plot(index_vals, data_sequence[:, j], linestyle='--', color='r', marker='.', markersize=4)
+        if j == (dim - 1):
+            ax1.set_xlabel("time index (t)", fontsize=10, fontweight='bold')
 
-    ax1 = fig.add_subplot(2, 1, 2)
-    st = 0
-    nc = len(COLORS_LIST)
-    for lab, seg in zip(labels, data_segments):
-        en = st + seg.shape[0] - 1
-        ax1.plot(np.arange(st, en + 1), seg[:, 0], linestyle='--', color=COLORS_LIST[lab % nc],
-                 marker='.', markersize=4)
-        st = en + 1
+        ax1.set_ylabel(r"$x_{}[t]$".format(j + 1), fontsize=10, fontweight='bold', rotation=0)
+        if j == 0:
+            ax1.set_title('Input sequence', fontsize=10, fontweight='bold')
 
-    ax1.set_xlabel("index", fontsize=10, fontweight='bold')
-    ax1.set_ylabel("value", fontsize=10, fontweight='bold')
     plt.plot()
-    plot_file = 'segmentation.png'
+    plot_file = 'sequence_plot.png'
+    fig.savefig(plot_file, dpi=600, bbox_inches='tight')
+
+    # Plot the segmented sequence
+    nc = len(COLORS_LIST)
+    fig = plt.figure()
+    for j in range(dim):
+        ax1 = fig.add_subplot(dim, 1, j + 1)
+        st = 0
+        for lab, seg in zip(labels, data_segments):
+            en = st + seg.shape[0]
+            ax1.plot(np.arange(st, en), seg[:, j], linestyle='--', color=COLORS_LIST[lab % nc],
+                     marker='.', markersize=4)
+            st = en
+
+        if j == (dim - 1):
+            ax1.set_xlabel("time index (t)", fontsize=10, fontweight='bold')
+
+        ax1.set_ylabel(r"$x_{}[t]$".format(j + 1), fontsize=10, fontweight='bold', rotation=0)
+        if j == 0:
+            ax1.set_title('Sequence segmentation result', fontsize=10, fontweight='bold')
+
+    plt.plot()
+    plot_file = 'sequence_segmented_plot.png'
     fig.savefig(plot_file, dpi=600, bbox_inches='tight')
 
 

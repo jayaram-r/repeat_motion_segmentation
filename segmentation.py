@@ -450,7 +450,7 @@ def find_distance_thresholds(templates, templates_info, warping_window, max_num_
                            distances.shape[0])
 
         # Using the 1.5 IQR rule for the upper threshold on distances
-        v = np.percentile(distances, [0, 25, 50, 75, 100])
+        v = np.percentile(distances, [0, 25, 50, 75, 99.9])
         th = max(v[4], v[3] + 1.5 * (v[3] - v[1]))
         distance_thresholds.append(th)
         logger.info("Upper threshold on distance DTW distance = %.6f", distance_thresholds[-1])
