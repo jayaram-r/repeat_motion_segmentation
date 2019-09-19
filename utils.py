@@ -86,7 +86,9 @@ def num_templates_to_sample(n):
     :param n: (int) number of templates.
     :return:
     """
-    vals = {k: n * scipy.special.comb(n - 1, k) for k in range(1, n - 1)}
+    # Adding a small value to break ties and give preference to the larger `k` in case of ties
+    vals = {k: (n * scipy.special.comb(n - 1, k) + 1e-6 * k) for k in range(1, n - 1)}
     k_max = max(vals, key=vals.get)
+    v_max = int(np.floor(vals[k_max]))
 
-    return k_max, vals[k_max]
+    return k_max, v_max
