@@ -1,10 +1,8 @@
 """
 Segmenting a time series with multiple repetitions from a given set of actions.
 
-Dynamic time warping (DTW) implementation by the DTAI research group, which has fast implementations (with C
-bindings), is used. Documentation and installation instructions can be found below:
-https://github.com/wannesm/dtaidistance
-https://dtaidistance.readthedocs.io/en/latest/index.html
+Dynamic time warping (DTW) implementation from the `tslearn` library is used. It supports multivariate time series
+and has fast a implementation based on numba.
 
 """
 import numpy as np
