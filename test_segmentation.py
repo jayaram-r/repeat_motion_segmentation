@@ -25,7 +25,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # https://stackoverflow.com/a/37232760
-COLORS_LIST = ['grey', 'r', 'b', 'g', 'c', 'orange', 'm', 'lawngreen', 'gold', 'y', 'hotpink', 'blueviolet']
+COLORS_LIST = ['grey', 'r', 'b', 'g', 'c', 'orange', 'm', 'lawngreen', 'gold', 'y', 'hotpink', 'blueviolet',
+               'crimson', 'lavender', 'khaki', 'darkseagreen', 'darkturquoise', 'brown', 'firebrick', 'maroon',
+               'orchid', 'teal', 'fuchsia', 'indigo', 'palevioletred', 'rosybrown']
 
 
 def main():
