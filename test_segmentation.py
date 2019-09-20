@@ -72,18 +72,22 @@ def generate_test_data():
     return template_sequences, data_sequence
 
 
-def segment_and_plot_results(template_sequences, data_sequence):
+def segment_and_plot_results(template_sequences, data_sequence, output_direc):
     # Value between 0 and 1 specifying the width of the Sakoe-Chiba window in terms of the length of the
     # longer sequence
     warping_window = 0.25
     # Value between 0 and 1 that controls the search range of the subsequence length
     alpha = 0.75
 
+    # Create the output directory if required
+    if not os.path.isdir(output_direc):
+        os.makedirs(output_direc)
+
     # Preprocess the template sequences and calculate the upper threshold on the average DTW distance corresponding
     # to each action.
     # Results of the template preprocessing are saved in a Pickle file that can be loaded and reused directly
     # on subsequent runs
-    results_file = os.path.join(os.getcwd(), 'template_results.pkl')
+    results_file = os.path.join(output_direc, 'template_results.pkl')
     results = None
     if os.path.isfile(results_file):
         with open(results_file, 'rb') as fp:
@@ -126,7 +130,7 @@ def segment_and_plot_results(template_sequences, data_sequence):
             ax1.set_title('Input sequence', fontsize=10, fontweight='bold')
 
     plt.plot()
-    plot_file = 'sequence_plot.png'
+    plot_file = os.path.join(output_direc, 'sequence_plot.png')
     fig.savefig(plot_file, dpi=600, bbox_inches='tight')
 
     # Plot the segmented sequence
@@ -149,7 +153,7 @@ def segment_and_plot_results(template_sequences, data_sequence):
             ax1.set_title('Sequence segmentation result', fontsize=10, fontweight='bold')
 
     plt.plot()
-    plot_file = 'sequence_segmented_plot.png'
+    plot_file = os.path.join(output_direc, 'sequence_segmented_plot.png')
     fig.savefig(plot_file, dpi=600, bbox_inches='tight')
 
 
@@ -158,7 +162,8 @@ def main():
     template_sequences, data_sequence = generate_test_data()
 
     # Perform segmentation of the data sequence and plot the results
-    segment_and_plot_results(template_sequences, data_sequence)
+    output_direc = os.path.join(os.getcwd(), 'results')
+    segment_and_plot_results(template_sequences, data_sequence, output_direc)
 
 
 if __name__ == '__main__':
