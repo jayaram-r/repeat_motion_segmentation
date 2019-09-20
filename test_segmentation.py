@@ -30,7 +30,7 @@ COLORS_LIST = ['grey', 'r', 'b', 'g', 'c', 'orange', 'm', 'lawngreen', 'gold', '
                'orchid', 'teal', 'fuchsia', 'indigo', 'palevioletred', 'rosybrown']
 
 
-def main():
+def generate_test_data():
     np.random.seed(seed=1234)
     # Choose one of: 'sine', 'cosine', 'gaussian', 'gaussian_inverted'
     curve = 'sine'
@@ -68,7 +68,15 @@ def main():
 
     # Concatenate the repetition subsequences into one. The segmentation algorithm takes this sequence as input.
     data_sequence = np.concatenate(data_sequence)
+
+    return template_sequences, data_sequence
+
+
+def segment_and_plot_results(template_sequences, data_sequence):
+    # Value between 0 and 1 specifying the width of the Sakoe-Chiba window in terms of the length of the
+    # longer sequence
     warping_window = 0.25
+    # Value between 0 and 1 that controls the search range of the subsequence length
     alpha = 0.75
 
     # Preprocess the template sequences and calculate the upper threshold on the average DTW distance corresponding
@@ -143,6 +151,14 @@ def main():
     plt.plot()
     plot_file = 'sequence_segmented_plot.png'
     fig.savefig(plot_file, dpi=600, bbox_inches='tight')
+
+
+def main():
+    # Generate synthetic template data and the test data sequence
+    template_sequences, data_sequence = generate_test_data()
+
+    # Perform segmentation of the data sequence and plot the results
+    segment_and_plot_results(template_sequences, data_sequence)
 
 
 if __name__ == '__main__':
