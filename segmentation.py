@@ -241,7 +241,7 @@ def normalize_subsequence(sequence, m, sequence_mean, sequence_stdev, sequence_m
 
 
 def search_subsequence(sequence, templates, templates_info, min_length, max_length, normalize=True,
-                       normalization_type='z-score', warping_window=None, use_lower_bounds=True):
+                       normalization_type='z-score', warping_window=None, use_lower_bounds=True, length_step=1):
     """
     Search for the subsequence that leads to minimum average DTW distance to the template sequences.
 
@@ -264,6 +264,7 @@ def search_subsequence(sequence, templates, templates_info, min_length, max_leng
                            the warping path to be closer to the diagonal. Note that a small value can also speed-up
                            the DTW calculation significantly.
     :param use_lower_bounds: Set to `True` to use the lower bounds of the DTW. This will speed up the search.
+    :param length_step: (int) length search is done in increments of this step. Default value is 1.
 
     :return: tuple `(len_best, d_min, label_best)`, where
              -- `len_best` is the best subsequence length,
@@ -307,7 +308,7 @@ def search_subsequence(sequence, templates, templates_info, min_length, max_leng
     # The middle value between `min_length` and `max_length` is used as the first value in the search range.
     # The rest of the values are randomized in order to take advantage of the lower bound based pruning
     mid_length = int(np.round(0.5 * (min_length + max_length)))
-    length_range = set(range(min_length, max_length + 1)) - {mid_length}
+    length_range = set(range(min_length, max_length + 1, length_step)) - {mid_length}
     length_range = np.insert(np.random.permutation(list(length_range)), 0, mid_length)
 
     len_best = mid_length
@@ -335,6 +336,7 @@ def search_subsequence(sequence, templates, templates_info, min_length, max_leng
         else:
             d, label = average_distance_to_templates(sequence_norm, templates, warping_window)
 
+        # logger.info("Length %d", m)
         if d < d_min:
             d_min = d
             label_best = label
@@ -587,7 +589,8 @@ def preprocess_templates(templates, normalize=True, normalization_type='z-score'
 
 
 def segment_repeat_sequences(data, templates_norm, templates_info, distance_thresholds, length_stats,
-                             normalize=True, normalization_type='z-score', warping_window=None):
+                             normalize=True, normalization_type='z-score', warping_window=None,
+                             length_step=1, offset_step=1):
     """
     Segment the sequence `data` to closely match the sequences specified in the list `templates_norm`.
 
@@ -613,6 +616,8 @@ def segment_repeat_sequences(data, templates_norm, templates_info, distance_thre
                            warping path to be flexible, while setting it to a small value (closer to 0) will constrain
                            the warping path to be closer to the diagonal. Note that a small value can also speed-up
                            the DTW calculation significantly.
+    :param length_step: (int) length search is done in increments of this step. Default value is 1.
+    :param offset_step: (int) offset search is done in increments of this step. Default value is 1.
 
     :return: (data_segments, labels)
         - data_segments: list of segmented subsequences, each of which are numpy arrays of shape (m, d) (`m` can be
@@ -639,7 +644,7 @@ def segment_repeat_sequences(data, templates_norm, templates_info, distance_thre
         while (data_rem.shape[0] - offset) > min_length:
             m, d_avg, label = search_subsequence(
                 data_rem[offset:, :], templates_norm, templates_info, min_length, max_length, normalize=normalize,
-                normalization_type=normalization_type, warping_window=warping_window
+                normalization_type=normalization_type, warping_window=warping_window, length_step=length_step
             )
             if d_avg <= distance_thresholds[label - 1]:
                 if match:
@@ -659,8 +664,8 @@ def segment_repeat_sequences(data, templates_norm, templates_info, distance_thre
                     match = True
                     info_best = [offset, m, d_avg, label]
 
-            offset += 1
             # logger.info("offset = %d, match = %d", offset, int(match))
+            offset += offset_step
             if match:
                 # Terminate if either of the conditions below is satisfied:
                 # 1. Offset exceeds the last index of the best subsequence found so far.

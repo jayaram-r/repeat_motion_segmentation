@@ -78,6 +78,8 @@ def segment_and_plot_results(template_sequences, data_sequence, output_direc):
     warping_window = 0.25
     # Value between 0 and 1 that controls the search range of the subsequence length
     alpha = 0.75
+    length_step = 1
+    offset_step = 1
 
     # Create the output directory if required
     if not os.path.isdir(output_direc):
@@ -109,7 +111,8 @@ def segment_and_plot_results(template_sequences, data_sequence, output_direc):
     # Perform segmentation of the data sequence
     data_segments, labels = segment_repeat_sequences(
         data_sequence, results['templates_normalized'], results['templates_info'], results['distance_thresholds'],
-        results['length_stats'], normalize=True, normalization_type='z-score', warping_window=warping_window
+        results['length_stats'], normalize=True, normalization_type='z-score', warping_window=warping_window,
+        length_step=length_step, offset_step=offset_step
     )
     t2 = time.time()
     logger.info("Time taken for segmentation = %.2f seconds", t2 - t1)
