@@ -41,14 +41,12 @@ def average_lb_distance_to_templates1(sequence, templates_info):
     len_seq = sequence.shape[0]
     val_min = np.inf
     for t in templates_info:
-        val = 0.0
         for temp in t:
-            val += (np.sqrt(np.sum((sequence[0, :] - temp.first_value) ** 2) +
-                            np.sum((sequence[-1, :] - temp.last_value) ** 2)) / (len_seq + temp.length))
+            val = (np.sqrt(np.sum((sequence[0, :] - temp.first_value) ** 2) +
+                           np.sum((sequence[-1, :] - temp.last_value) ** 2)) / (len_seq + temp.length))
 
-        val /= len(t)
-        if val < val_min:
-            val_min = val
+            if val < val_min:
+                val_min = val
 
     return val_min
 
@@ -75,7 +73,6 @@ def average_lb_distance_to_templates2(sequence, templates, templates_info):
 
     val_min = np.inf
     for i, t in enumerate(templates):
-        val = 0.0
         for j, temp in enumerate(t):
             info = templates_info[i][j]
             # For the first and last values of the sequence, we calculate the exact deviation instead of
@@ -116,11 +113,9 @@ def average_lb_distance_to_templates2(sequence, templates, templates_info):
             val2 = np.sqrt(np.sum(r3 ** 2) + np.sum(r4 ** 2) + dev_first_last) / (len_seq + info.length)
 
             # Maximum of the two lower bounds is still a lower bound. This is added up to compute the average
-            val += max(val1, val2)
-
-        val /= len(t)
-        if val < val_min:
-            val_min = val
+            val = max(val1, val2)
+            if val < val_min:
+                val_min = val
 
     return val_min
 
@@ -131,7 +126,6 @@ def average_distance_to_templates(sequence, templates, warping_window):
     val_min = np.inf
     label = 1
     for i, t in enumerate(templates):
-        val = 0.0
         for temp in t:
             len_temp = temp.shape[0]
             if warping_window is None:
@@ -139,18 +133,15 @@ def average_distance_to_templates(sequence, templates, warping_window):
             else:
                 mask = sakoe_chiba_mask(len_seq, len_temp, warping_window)
 
-            d = njit_dtw(sequence, temp, mask=mask) / float(len_seq + len_temp)
-            val += d
-
-        val /= len(t)
-        if val < val_min:
-            val_min = val
-            label = i + 1
+            val = njit_dtw(sequence, temp, mask=mask) / float(len_seq + len_temp)
+            if val < val_min:
+                val_min = val
+                label = i + 1
 
     return val_min, label
 
 
-@jit(nopython=True)
+# @jit(nopython=True)
 def search_subsequence(sequence, templates, templates_info, min_length, max_length, normalize=True,
                        warping_window=None, use_lower_bounds=True, length_step=1):
     """
@@ -182,7 +173,6 @@ def search_subsequence(sequence, templates, templates_info, min_length, max_leng
                  the matched action,
              -- `label_best` is the label of the best-matching template.
     """
-    dim = sequence.shape[1]
     N = sequence.shape[0]
     if N > max_length:
         # Truncate the sequence at `max_length` since the rest of the sequence is not needed
@@ -197,6 +187,9 @@ def search_subsequence(sequence, templates, templates_info, min_length, max_leng
     if normalize:
         # Calculate the rolling mean and standard-deviation of the entire data sequence. This will be used
         # for z-score normalization of subsequences of different lengths.
+        """
+        # Use this approach if numba (the @jit decorator) is used
+        dim = sequence.shape[1]
         den = np.arange(1, N + 1)
         sequence_mean = np.zeros((N, dim))
         sequence_stdev = np.zeros((N, dim))
@@ -204,14 +197,14 @@ def search_subsequence(sequence, templates, templates_info, min_length, max_leng
             sequence_mean[:, j] = np.cumsum(sequence[:, j]) / den
             sequence_stdev[:, j] = np.sqrt(1e-16 +
                                            np.cumsum((sequence[:, j] - sequence_mean[:, j]) ** 2) / den)
-
         """
-        # Not using this approach because `numba` fails when `np.cumsum` is used with the argument `axis=0`.
+
+        # Using this approach causes `numba` to fail because `np.cumsum` is used with the argument `axis=0`.
+        # Use it if not using the @jit decorator
         den = np.arange(1, N + 1).reshape((N, 1))
         sequence_mean = np.cumsum(sequence, axis=0) / den
         arr = (sequence - sequence_mean) ** 2
         sequence_stdev = np.sqrt(1e-16 + np.cumsum(arr, axis=0) / den)
-        """
     else:
         # This will not be used
         sequence_mean = sequence
