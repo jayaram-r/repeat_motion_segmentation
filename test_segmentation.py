@@ -77,7 +77,7 @@ def generate_test_data():
 
 
 def segment_and_plot_results(template_sequences, template_labels, data_sequence, output_direc, warping_window=0.25,
-                             alpha=0.75, length_step=1, offset_step=1, approx=False):
+                             alpha=0.75, length_step=1, offset_step=1, max_overlap=10, approx=False):
     """
 
     :param template_sequences: list of template sequences corresponding to each action.
@@ -90,6 +90,7 @@ def segment_and_plot_results(template_sequences, template_labels, data_sequence,
     :param alpha: float value in (0, 1] that controls the search range of the subsequence length.
     :param length_step: (int) length search is done in increments of this step. Default value is 1.
     :param offset_step: (int) offset search is done in increments of this step. Default value is 1.
+    :param max_overlap: (int) maximum allowed overlap between successive segments. Set to 0 for no overlap.
     :param approx: set to True to enable a coarse but faster search over the offsets.
 
     :return: None
@@ -123,9 +124,9 @@ def segment_and_plot_results(template_sequences, template_labels, data_sequence,
     t1 = time.time()
     # Perform segmentation of the data sequence
     data_segments, labels = segment_repeat_sequences(
-        data_sequence, results['templates_normalized'], results['templates_info'], results['distance_thresholds'],
-        results['length_stats'], normalize=True, warping_window=warping_window, length_step=length_step,
-        offset_step=offset_step, approx=approx
+        data_sequence, results['templates_normalized'], results['templates_info'], results['template_counts'],
+        results['distance_thresholds'], results['length_stats'], normalize=True, warping_window=warping_window,
+        length_step=length_step, offset_step=offset_step, max_overlap=max_overlap, approx=approx
     )
     t2 = time.time()
     logger.info("Time taken for segmentation = %.2f seconds", t2 - t1)
@@ -156,7 +157,12 @@ def segment_and_plot_results(template_sequences, template_labels, data_sequence,
     for j in range(dim):
         ax1 = fig.add_subplot(dim, 1, j + 1)
         st = 0
+        nseg = 0
         for lab, seg in zip(labels, data_segments):
+            if max_overlap > 0 and nseg > 0 and lab == 0:
+                # First few points will be overlapping with the previous segment and should not be plotted again
+                seg = seg[max_overlap:, :]
+
             # Adding legend only for the first subplot pane
             if j == 0:
                 lab_str = str(template_labels[lab - 1][0][0]) if lab > 0 else 'No match'
@@ -175,6 +181,7 @@ def segment_and_plot_results(template_sequences, template_labels, data_sequence,
                 ax1.plot(np.arange(st, en), seg[:, j], linestyle='--', color=COLORS_LIST[lab % nc],
                          marker='.', markersize=4)
             st = en
+            nseg += 1
 
         if j == (dim - 1):
             ax1.set_xlabel("time index (t)", fontsize=10, fontweight='bold')

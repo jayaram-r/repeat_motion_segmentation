@@ -33,7 +33,7 @@ template_info_tuple = namedtuple('template_info_tuple', ['length', 'min', 'max',
 
 
 @jit(nopython=True)
-def average_lb_distance_to_templates1(sequence, templates_info):
+def lb_distance_to_templates1(sequence, templates_info):
     """
     Simple but fast lower bound to the DTW based on comparison of only the first and last values of the sequence
     and the templates.
@@ -51,10 +51,10 @@ def average_lb_distance_to_templates1(sequence, templates_info):
     return val_min
 
 
-@jit(nopython=True)
-def average_lb_distance_to_templates2(sequence, templates, templates_info):
+@jit(nopython=True, parallel=False)
+def lb_distance_to_templates2(sequence, templates, templates_info):
     """
-    Minimum average distance to the templates, where the distance is the lower bound of the DTW distance proposed by:
+    Minimum distance to the templates, where the distance is the lower bound of the DTW distance proposed by:
     Yi, Byoung-Kee, H. V. Jagadish, and Christos Faloutsos. "Efficient retrieval of similar time sequences
     under time warping." Proceedings 14th International Conference on Data Engineering. IEEE, 1998.
 
@@ -65,11 +65,18 @@ def average_lb_distance_to_templates2(sequence, templates, templates_info):
     final lower bound.
     """
     len_seq = sequence.shape[0]
+    dim = sequence.shape[1]
+    # Maximum and minimum of the sequence along each dimension
+    """
+    # Not using `axis=0` argument for the numpy.min and numpy.max functions because it is not supported by numba
     # min_seq = np.min(sequence, axis=0)
     # max_seq = np.max(sequence, axis=0)
-    # Not using `axis=0` argument for the numpy.min and numpy.max functions because it is not supported by numba
-    min_seq = np.array([np.min(sequence[:, j]) for j in range(sequence.shape[1])])
-    max_seq = np.array([np.max(sequence[:, j]) for j in range(sequence.shape[1])])
+    """
+    min_seq = np.zeros(dim)
+    max_seq = np.zeros(dim)
+    for j in prange(dim):
+        min_seq[j] = np.min(sequence[:, j])
+        max_seq[j] = np.max(sequence[:, j])
 
     val_min = np.inf
     for i, t in enumerate(templates):
@@ -79,71 +86,103 @@ def average_lb_distance_to_templates2(sequence, templates, templates_info):
             # deviation with the maximum or minimum
             dev_first_last = np.sum((sequence[0, :] - info.first_value) ** 2) + \
                              np.sum((sequence[-1, :] - info.last_value) ** 2)
+            diff1 = 0.
+            diff2 = 0.
+            for k in prange(dim):
+                # First difference uses the maximum and minimum values of the template sequence as the envelope
+                vec1 = sequence[:, k] - info.max[k]
+                vec1[vec1 < 0.] = 0.
+                vec2 = info.min[k] - sequence[:, k]
+                vec2[vec2 < 0.] = 0.
+                diff1 += np.sum(vec1[1:-1] ** 2 + vec2[1:-1] ** 2)
 
-            # First lower bound calculated using the maximum and minimum values of the template as the envelope
-            q1 = sequence - info.max
-            # q1[q1 < 0.0] = 0.0
-            # Alternative to boolean indexing on 2d arrays which fails in numba. Also, numpy.clip is not
-            # supported by numba
-            r1 = q1 * (q1 >= 0.0)
-            r1[0, :] = 0.0
-            r1[-1, :] = 0.0
+                # Second difference uses the maximum and minimum values of the input sequence as the envelope
+                vec3 = temp[:, k] - max_seq[k]
+                vec3[vec3 < 0.] = 0.
+                vec4 = min_seq[k] - temp[:, k]
+                vec4[vec4 < 0.] = 0.
+                diff2 += np.sum(vec3[1:-1] ** 2 + vec4[1:-1] ** 2)
 
-            q2 = info.min - sequence
-            # q2[q2 < 0.0] = 0.0
-            r2 = q2 * (q2 >= 0.0)
-            r2[0, :] = 0.0
-            r2[-1, :] = 0.0
-
-            val1 = np.sqrt(np.sum(r1 ** 2) + np.sum(r2 ** 2) + dev_first_last) / (len_seq + info.length)
-
-            # Second lower bound calculated using the maximum and minimum values of the sequence as the envelope
-            q3 = temp - max_seq
-            # q3[q3 < 0.0] = 0.0
-            r3 = q3 * (q3 >= 0.0)
-            r3[0, :] = 0.0
-            r3[-1, :] = 0.0
-
-            q4 = min_seq - temp
-            # q4[q4 < 0.0] = 0.0
-            r4 = q4 * (q4 >= 0.0)
-            r4[0, :] = 0.0
-            r4[-1, :] = 0.0
-
-            val2 = np.sqrt(np.sum(r3 ** 2) + np.sum(r4 ** 2) + dev_first_last) / (len_seq + info.length)
-
-            # Maximum of the two lower bounds is still a lower bound. This is added up to compute the average
-            val = max(val1, val2)
+            val = np.sqrt(max(diff1, diff2) + dev_first_last) / (len_seq + info.length)
             if val < val_min:
                 val_min = val
 
     return val_min
 
 
-@jit(nopython=True)
-def average_distance_to_templates(sequence, templates, warping_window):
+@jit(nopython=True, parallel=False)
+def fast_approx_matching(sequence, templates, templates_info, template_counts, warping_window,
+                         dist_min_prior=np.inf):
     len_seq = sequence.shape[0]
-    val_min = np.inf
-    label = 1
-    for i, t in enumerate(templates):
-        for temp in t:
-            len_temp = temp.shape[0]
-            if warping_window is None:
-                mask = np.zeros((len_seq, len_temp))
-            else:
-                mask = sakoe_chiba_mask(len_seq, len_temp, warping_window)
+    dim = sequence.shape[1]
+    # Maximum and minimum of the sequence along each dimension
+    """
+    # Not using `axis=0` argument for the numpy.min and numpy.max functions because it is not supported by numba
+    # min_seq = np.min(sequence, axis=0)
+    # max_seq = np.max(sequence, axis=0)
+    """
+    min_seq = np.zeros(dim)
+    max_seq = np.zeros(dim)
+    for j in prange(dim):
+        min_seq[j] = np.min(sequence[:, j])
+        max_seq[j] = np.max(sequence[:, j])
 
-            val = njit_dtw(sequence, temp, mask=mask) / float(len_seq + len_temp)
-            if val < val_min:
-                val_min = val
+    dist_min = dist_min_prior
+    label = 0
+    for i in range(template_counts[0]):     # each action
+        for j in range(template_counts[i + 1]):     # each template corresponding to this action
+            temp = templates[i][j]
+            temp_info = templates_info[i][j]
+
+            dev_first_last = np.sum((sequence[0, :] - temp_info.first_value) ** 2) + \
+                             np.sum((sequence[-1, :] - temp_info.last_value) ** 2)
+
+            # First simple (but loose) lower bound to the DTW distance
+            val_lb1 = np.sqrt(dev_first_last) / (len_seq + temp_info.length)
+            if val_lb1 > dist_min:
+                # Lower bound is greater than the current minimum. So the actual DTW distance need not be calculated
+                continue
+
+            # Second lower bound to the DTW distance
+            diff1 = 0.
+            diff2 = 0.
+            for j in prange(dim):
+                # First difference uses the maximum and minimum values of the template sequence as the envelope
+                vec1 = sequence[:, j] - temp_info.max[j]
+                vec1[vec1 < 0.] = 0.
+                vec2 = temp_info.min[j] - sequence[:, j]
+                vec2[vec2 < 0.] = 0.
+                diff1 += np.sum(vec1[1:-1] ** 2 + vec2[1:-1] ** 2)
+
+                # Second difference uses the maximum and minimum values of the input sequence as the envelope
+                vec3 = temp[:, j] - max_seq[j]
+                vec3[vec3 < 0.] = 0.
+                vec4 = min_seq[j] - temp[:, j]
+                vec4[vec4 < 0.] = 0.
+                diff2 += np.sum(vec3[1:-1] ** 2 + vec4[1:-1] ** 2)
+
+            val_lb2 = np.sqrt(max(diff1, diff2) + dev_first_last) / (len_seq + temp_info.length)
+            if val_lb2 > dist_min:
+                # Lower bound is greater than the current minimum. So the actual DTW distance need not be calculated
+                continue
+
+            # DTW distance calculation
+            if warping_window is None:
+                mask = np.zeros((len_seq, temp_info.length))
+            else:
+                mask = sakoe_chiba_mask(len_seq, temp_info.length, warping_window)
+
+            val = njit_dtw(sequence, temp, mask=mask) / float(len_seq + temp_info.length)
+            if val < dist_min:
+                dist_min = val
                 label = i + 1
 
-    return val_min, label
+    return dist_min, label
 
 
 # @jit(nopython=True)
-def search_subsequence(sequence, templates, templates_info, min_length, max_length, normalize=True,
-                       warping_window=None, use_lower_bounds=True, length_step=1):
+def search_subsequence(sequence, templates, templates_info, template_counts, min_length, max_length,
+                       normalize=True, warping_window=None, length_step=1, dist_min_prior=np.inf):
     """
     Search for the subsequence that leads to minimum average DTW distance to the template sequences.
 
@@ -152,6 +191,8 @@ def search_subsequence(sequence, templates, templates_info, min_length, max_leng
                       each `s_ij` is a numpy array (of shape (M, d)) corresponding to a template sequence.
     :param templates_info: list similar to `templates`, but each element of the list is a namedtuple with information
                            about the template such as length, minimum value, and maximum value.
+    :param template_counts: list or numpy array of integer values. First value is the number of actions. The rest of
+                            the values are the number of templates correspondsing to each action.
     :param min_length: minimum length of the subsequence to search.
     :param max_length: maximum length of the subsequence to search.
     :param normalize: Apply normalization to the templates and the data subsequences, if set to True.
@@ -164,8 +205,9 @@ def search_subsequence(sequence, templates, templates_info, min_length, max_leng
                            warping path to be flexible, while setting it to a small value (closer to 0) will constrain
                            the warping path to be closer to the diagonal. Note that a small value can also speed-up
                            the DTW calculation significantly.
-    :param use_lower_bounds: Set to `True` to use the lower bounds of the DTW. This will speed up the search.
     :param length_step: (int) length search is done in increments of this step. Default value is 1.
+    :param dist_min_prior: (float) Minimum distance found from a previous search or iteration.
+                           Set to np.inf by default.
 
     :return: tuple `(len_best, d_min, label_best)`, where
              -- `len_best` is the best subsequence length,
@@ -198,7 +240,6 @@ def search_subsequence(sequence, templates, templates_info, min_length, max_leng
             sequence_stdev[:, j] = np.sqrt(1e-16 +
                                            np.cumsum((sequence[:, j] - sequence_mean[:, j]) ** 2) / den)
         """
-
         # Using this approach causes `numba` to fail because `np.cumsum` is used with the argument `axis=0`.
         # Use it if not using the @jit decorator
         den = np.arange(1, N + 1).reshape((N, 1))
@@ -218,38 +259,46 @@ def search_subsequence(sequence, templates, templates_info, min_length, max_leng
 
     len_best = mid_length
     label_best = 0
-    d_min = np.inf
+    dist_min = dist_min_prior
     for m in length_range:
         if normalize:
             sequence_norm = (sequence[:m, :] - sequence_mean[m - 1, :]) / sequence_stdev[m - 1, :]
         else:
             sequence_norm = sequence[:m, :]
 
-        if use_lower_bounds:
-            # Cascading lower bound distances to the DTW for fast pruning of bad (non-match) sequences.
-            # Lower bound 1 based on comparison of only the first and last values of the sequence and template.
-            d_lb1 = average_lb_distance_to_templates1(sequence_norm, templates_info)
-            # If the minimum average distance to the templates based on this lower bound is larger than the current
-            # minimum `d_min`, then there is no need to calculate the DTW distances to the templates
-            if d_lb1 > d_min:
-                continue
-
-            # Lower bound 2 based on comparison with a precomputed lower and upper bound to the template sequences.
-            d_lb2 = average_lb_distance_to_templates2(sequence_norm, templates, templates_info)
-            if d_lb2 > d_min:
-                continue
-
-        d, label = average_distance_to_templates(sequence_norm, templates, warping_window)
-        if d < d_min:
-            d_min = d
+        d, label = fast_approx_matching(sequence_norm, templates, templates_info, template_counts, warping_window,
+                                        dist_min_prior=dist_min)
+        if d < dist_min:
+            dist_min = d
             label_best = label
             len_best = m
 
-    return len_best, d_min, label_best
+    return len_best, dist_min, label_best
 
 
-def helper_average_dtw_distance(sequences, warping_window, indices):
-    d_avg, _ = average_distance_to_templates(
+@jit(nopython=True)
+def distance_to_templates(sequence, templates, warping_window):
+    len_seq = sequence.shape[0]
+    val_min = np.inf
+    label = 1
+    for i, t in enumerate(templates):
+        for temp in t:
+            len_temp = temp.shape[0]
+            if warping_window is None:
+                mask = np.zeros((len_seq, len_temp))
+            else:
+                mask = sakoe_chiba_mask(len_seq, len_temp, warping_window)
+
+            val = njit_dtw(sequence, temp, mask=mask) / float(len_seq + len_temp)
+            if val < val_min:
+                val_min = val
+                label = i + 1
+
+    return val_min, label
+
+
+def helper_distance_to_templates(sequences, warping_window, indices):
+    d_avg, _ = distance_to_templates(
         sequences[indices[0]], (tuple([sequences[i] for i in indices[1:]]), ), warping_window
     )
     return d_avg
@@ -293,7 +342,8 @@ def find_distance_thresholds(templates, template_labels, templates_info, warping
                             upper bound on the number of distance samples to be computed.
     :param seed: Seed of the random number generator.
 
-    :return: (distance_thresholds, templates_selected, templates_info_selected)
+    :return: (distance_thresholds, templates_selected, template_labels_selected, templates_info_selected,
+              template_counts)
     - distance_thresholds: List of distance thresholds, one for each action.
     - templates_selected: Selected subset of normalized template sequences per action. A tuple of tuples, where each
                           element of inner tuple is a 2d numpy array with the template sequences.
@@ -301,16 +351,20 @@ def find_distance_thresholds(templates, template_labels, templates_info, warping
                                 element of the inner tuple is the label.
     - templates_info_selected: Information about the selected subset of template sequences per action. A tuple of
                                tuples, where each element of inner tuple is a namedtuple of type `template_info_tuple`.
+    - template_counts: array of integers, where the first value is the number of actions and the subsequent values
+                       are the number of templates per action.
     """
     np.random.seed(seed)
     num_proc = max(1, multiprocessing.cpu_count() - 1)
+    num_actions = len(templates)
 
     templates_selected = []
     template_labels_selected = []
     templates_info_selected = []
+    template_counts = [num_actions]
     distance_thresholds = []
     num_templates = dict()
-    for i in range(len(templates)):
+    for i in range(num_actions):
         # number of templates for this action
         n = len(templates[i])
         if n in num_templates:
@@ -327,6 +381,7 @@ def find_distance_thresholds(templates, template_labels, templates_info, warping
         templates_selected.append(tuple([templates[i][j] for j in ind]))
         template_labels_selected.append(tuple([template_labels[i][j] for j in ind]))
         templates_info_selected.append(tuple([templates_info[i][j] for j in ind]))
+        template_counts.append(ind.shape[0])
 
         comb_list = list(combinations(range(n - 1), k))
         len_comb_list = len(comb_list)
@@ -341,7 +396,7 @@ def find_distance_thresholds(templates, template_labels, templates_info, warping
                 ind = [jj for jj in range(n) if jj != j]
                 index_list.extend([[j] + [ind[t] for t in tup] for tup in comb_list])
 
-            helper_partial = partial(helper_average_dtw_distance, templates[i], warping_window)
+            helper_partial = partial(helper_distance_to_templates, templates[i], warping_window)
             pool_obj = multiprocessing.Pool(processes=num_proc)
             distances = []
             _ = pool_obj.map_async(helper_partial, index_list, chunksize=None, callback=distances.extend)
@@ -353,7 +408,7 @@ def find_distance_thresholds(templates, template_labels, templates_info, warping
                 # Every index excluding `j`
                 ind = [jj for jj in range(n) if jj != j]
                 distances.extend([
-                    helper_average_dtw_distance(templates[i], warping_window, [j] + [ind[t] for t in tup])
+                    helper_distance_to_templates(templates[i], warping_window, [j] + [ind[t] for t in tup])
                     for tup in comb_list
                 ])
 
@@ -363,18 +418,19 @@ def find_distance_thresholds(templates, template_labels, templates_info, warping
                            distances.shape[0])
 
         # Using the 1.5 IQR rule for the upper threshold on distances
-        v = np.percentile(distances, [0, 25, 50, 75, 100])
+        v = np.percentile(distances, [0, 25, 50, 75, 99.8])
         th = max(v[4], v[3] + 1.5 * (v[3] - v[1]))
         distance_thresholds.append(th)
-        logger.info("Upper threshold on distance DTW distance = %.6f", distance_thresholds[-1])
+        logger.info("Upper threshold on the DTW distance to templates = %.6f", distance_thresholds[-1])
         logger.info("Min = %.6f, Median = %.6f, Max = %.6f", v[0], v[2], v[4])
 
     # Converting to tuple since it helps with numba compilation in `nopython` mode
     templates_selected = tuple(templates_selected)
     template_labels_selected = tuple(template_labels_selected)
     templates_info_selected = tuple(templates_info_selected)
+    template_counts = np.array(template_counts, dtype=np.int)
 
-    return distance_thresholds, templates_selected, template_labels_selected, templates_info_selected
+    return distance_thresholds, templates_selected, template_labels_selected, templates_info_selected, template_counts
 
 
 def normalize_templates(templates, alpha, normalize=True):
@@ -473,13 +529,14 @@ def preprocess_templates(templates, template_labels, normalize=True, warping_win
 
     logger.info("Calculating the upper threshold on the DTW distance for each action based on the given "
                 "template sequences.")
-    distance_thresholds, templates_norm_selected, template_labels_selected, templates_info_selected = \
-        find_distance_thresholds(templates_norm, template_labels, templates_info, warping_window)
+    (distance_thresholds, templates_norm_selected, template_labels_selected, templates_info_selected,
+     template_counts) = find_distance_thresholds(templates_norm, template_labels, templates_info, warping_window)
 
     results = {
         'templates_normalized': templates_norm_selected,
         'template_labels': template_labels_selected,
         'templates_info': templates_info_selected,
+        'template_counts': template_counts,
         'distance_thresholds': distance_thresholds,
         'length_stats': length_stats
     }
@@ -491,8 +548,9 @@ def preprocess_templates(templates, template_labels, normalize=True, warping_win
     return results
 
 
-def segment_repeat_sequences(data, templates_norm, templates_info, distance_thresholds, length_stats, normalize=True,
-                             warping_window=None, length_step=1, offset_step=1, approx=False):
+def segment_repeat_sequences(data, templates_norm, templates_info, template_counts, distance_thresholds,
+                             length_stats, normalize=True, warping_window=None, length_step=1, offset_step=1,
+                             max_overlap=0, approx=False):
     """
     Segment the sequence `data` to closely match the sequences specified in the list `templates_norm`.
 
@@ -502,6 +560,8 @@ def segment_repeat_sequences(data, templates_norm, templates_info, distance_thre
                            and each `s_ij` is a numpy array (of shape (M, d)) corresponding to a template sequence.
                            The template sequences are expected to be normalized.
     :param templates_info: list of namedtuples with information about the templates in `templates_norm`.
+    :param template_counts: list or numpy array of integer values. First value is the number of actions. The rest of
+                            the values are the number of templates correspondsing to each action.
     :param distance_thresholds: list of float values with length equal to the number of the actions (i.e. length
                                 of `templates_norm`). Each value is an upper threshold on the average DTW distance
                                 corresponding to templates from a given action.
@@ -519,6 +579,7 @@ def segment_repeat_sequences(data, templates_norm, templates_info, distance_thre
                            the DTW calculation significantly.
     :param length_step: (int) length search is done in increments of this step. Default value is 1.
     :param offset_step: (int) offset search is done in increments of this step. Default value is 1.
+    :param max_overlap: (int) maximum allowed overlap between successive segments. Set to 0 for no overlap.
     :param approx: set to True to enable a coarse but faster search over the offsets.
 
     :return: (data_segments, labels)
@@ -528,6 +589,8 @@ def segment_repeat_sequences(data, templates_norm, templates_info, distance_thre
                   templates in position `i - 1` of the input list `templates`. Label value `0` indicates that the
                   corresponding subsequence in `data_segments` could not be matched to any action.
     """
+    offset_step_approx = 5 * offset_step
+
     logger.info("Length of the input sequence = %d. Dimension of the input sequence = %d.",
                 data.shape[0], data.shape[1])
     min_length, median_length, max_length = length_stats
@@ -541,21 +604,22 @@ def segment_repeat_sequences(data, templates_norm, templates_info, distance_thre
     data_rem = copy.copy(data)
     while data_rem.shape[0] > min_length:
         offset = 0
-        info_best = [0, 0, np.inf, 0]       # offset, sequence_length, avg_distance, label
-        match = False
+        info_best = [0, 0, np.inf, 0]       # offset, sequence_length, min_distance, label
+        match = 0
         while (data_rem.shape[0] - offset) > min_length:
-            m, d_avg, label = search_subsequence(
-                data_rem[offset:, :], templates_norm, templates_info, min_length, max_length, normalize=normalize,
-                warping_window=warping_window, length_step=length_step
+            m, d_min, label = search_subsequence(
+                data_rem[offset:, :], templates_norm, templates_info, template_counts, min_length, max_length,
+                normalize=normalize, warping_window=warping_window, length_step=length_step,
+                dist_min_prior=info_best[2]
             )
-            if d_avg <= distance_thresholds[label - 1]:
+            if (label > 0) and (d_min <= distance_thresholds[label - 1]):
                 if match:
                     if label == info_best[3]:
                         # Same label as the current best match
-                        if d_avg < info_best[2]:
+                        if d_min < info_best[2]:
                             # Lower average DTW distance than the current best match
-                            # match = True
-                            info_best = [offset, m, d_avg, label]
+                            match += 1
+                            info_best = [offset, m, d_min, label]
 
                     else:
                         # Different label from the current best match. In this case, we retain the current best
@@ -563,19 +627,19 @@ def segment_repeat_sequences(data, templates_norm, templates_info, distance_thre
                         break
                 else:
                     # First matching subsequence
-                    match = True
-                    info_best = [offset, m, d_avg, label]
+                    match = 1
+                    info_best = [offset, m, d_min, label]
+                    if approx:
+                        # If `approx` is set to True, then we backtrack the offset to do a finer search
+                        # over offset values
+                        offset_new = offset - offset_step_approx + offset_step
+                        if offset_new > 0:
+                            offset = offset_new
+                            continue
 
-            logger.info("offset = %d, match = %d", offset, int(match))
+            # logger.info("Offset = %d, match = %d", offset, int(match))
             if match:
                 offset += offset_step
-            else:
-                if approx:
-                    offset += (5 * offset_step)
-                else:
-                    offset += offset_step
-
-            if match:
                 # Terminate if either of the conditions below is satisfied:
                 # 1. Offset exceeds the last index of the best subsequence found so far.
                 # 2. If a match has been found for a certain offset value, and a string of increasing values of
@@ -584,10 +648,12 @@ def segment_repeat_sequences(data, templates_norm, templates_info, distance_thre
                 #
                 if (offset - info_best[0]) > 10 or (offset - info_best[0]) >= (info_best[1] - 1):
                     break
+            else:
+                offset += (offset_step_approx if approx else offset_step)
 
         if match:
             num_seg += 1
-            offset, m, d_avg, label = info_best
+            offset, m, d_min, label = info_best
             if offset > 0:
                 # The segment prior to the offset does not match any action. Hence, its label is set to 0
                 data_segments.append(data_rem[:offset, :])
@@ -595,9 +661,10 @@ def segment_repeat_sequences(data, templates_norm, templates_info, distance_thre
 
             data_segments.append(data_rem[offset:(offset + m), :])
             labels.append(label)
-            data_rem = data_rem[(offset + m):, :]
             logger.info("Segment %d: Length of matched segment = %d, offset = %d, matched template label = %d, "
-                        "average DTW distance = %.6f.", num_seg, m, offset, label, d_avg)
+                        "DTW distance = %.6f.", num_seg, m, offset, label, d_min)
+            st = max(0, offset + m - max_overlap)
+            data_rem = data_rem[st:, :]
         else:
             # No matches could be found in this subsequence
             data_segments.append(data_rem)
