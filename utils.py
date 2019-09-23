@@ -1,5 +1,6 @@
 import numpy as np
 import scipy
+from numba import jit, prange
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -92,3 +93,53 @@ def num_templates_to_sample(n):
     v_max = int(np.floor(vals[k_max]))
 
     return k_max, v_max
+
+
+@jit(nopython=True)
+def sakoe_chiba_mask(sz1, sz2, warping_window):
+    """
+    Slightly modified version of the Sakoe-Chiba mask computed in the `tslearn` library.
+
+    :param sz1: (int) length of the first time series.
+    :param sz2: (int) length of the second time series.
+    :param warping_window: float in [0, 1] specifying the warping window as a fraction.
+
+    :return: boolean array of shape (sz1, sz2).
+    """
+    # The warping window cannot be smaller than the difference between the length of the sequences
+    w = max(int(np.ceil(warping_window * max(sz1, sz2))),
+            abs(sz1 - sz2) + 1)
+    mask = np.full((sz1, sz2), np.inf)
+    if sz1 <= sz2:
+        for i in prange(sz1):
+            lower = max(0, i - w)
+            upper = min(sz2, i + w) + 1
+            mask[i, lower:upper] = 0.
+    else:
+        for i in prange(sz2):
+            lower = max(0, i - w)
+            upper = min(sz1, i + w) + 1
+            mask[lower:upper, i] = 0.
+
+    return mask
+
+
+# @jit(nopython=True)
+def stratified_sample(labels, n, k):
+    if k < n:
+        label_set = np.unique(labels)
+        index_labels = [np.random.permutation(np.where(labels == lab)[0]) for lab in label_set]
+        index = []
+        m = 0
+        i = 0
+        while m < k:
+            arr = [v[i] for v in index_labels if i < v.shape[0]]
+            index.extend(arr)
+            m += len(arr)
+            i += 1
+
+        index = np.array(index[:k], dtype=np.int)
+    else:
+        index = np.random.permutation(n)
+
+    return index

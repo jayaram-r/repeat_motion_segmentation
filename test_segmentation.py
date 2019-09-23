@@ -42,7 +42,8 @@ def generate_test_data():
     # Generate a set of sequences to use as templates for this action
     num_templates = 10
     template_sequences = []
-    for tp in [1.0, 0.5, 0.25, 2.0]:
+    template_labels = []
+    for i, tp in enumerate([1.0, 0.5, 0.25, 2.0], start=1):
         a = []
         for _ in range(num_templates):
             a.append(
@@ -50,6 +51,9 @@ def generate_test_data():
             )
 
         template_sequences.append(a)
+        # Second element of the tuple is just a dummy value of 1. It is used in the motion sensor data to
+        # denote the category of speed: "slow", "normal", or "fast"
+        template_labels.append([(i, 'normal') for _ in a])
 
     # Generate the data sequence
     data_sequence = []
@@ -69,18 +73,27 @@ def generate_test_data():
     # Concatenate the repetition subsequences into one. The segmentation algorithm takes this sequence as input.
     data_sequence = np.concatenate(data_sequence)
 
-    return template_sequences, data_sequence
+    return template_sequences, template_labels, data_sequence
 
 
-def segment_and_plot_results(template_sequences, data_sequence, output_direc):
-    # Value between 0 and 1 specifying the width of the Sakoe-Chiba window in terms of the length of the
-    # longer sequence
-    warping_window = 0.25
-    # Value between 0 and 1 that controls the search range of the subsequence length
-    alpha = 0.75
-    length_step = 1
-    offset_step = 1
+def segment_and_plot_results(template_sequences, template_labels, data_sequence, output_direc, warping_window=0.25,
+                             alpha=0.75, length_step=1, offset_step=1, approx=False):
+    """
 
+    :param template_sequences: list of template sequences corresponding to each action.
+    :param template_labels: list of template labels corresponding to each action.
+    :param data_sequence: numpy array of shape `(N, d)` specifying the data sequence to be segmented. N is the
+                          length and d is the dimension of the sequence.
+    :param output_direc: output directory name.
+    :param warping_window: Value in (0, 1] specifying the size of the Sakoe-Chiba band used for constraining the DTW
+                           paths.
+    :param alpha: float value in (0, 1] that controls the search range of the subsequence length.
+    :param length_step: (int) length search is done in increments of this step. Default value is 1.
+    :param offset_step: (int) offset search is done in increments of this step. Default value is 1.
+    :param approx: set to True to enable a coarse but faster search over the offsets.
+
+    :return: None
+    """
     # Create the output directory if required
     if not os.path.isdir(output_direc):
         os.makedirs(output_direc)
@@ -98,8 +111,8 @@ def segment_and_plot_results(template_sequences, data_sequence, output_direc):
     if results is None:
         t1 = time.time()
         results = preprocess_templates(
-            template_sequences, normalize=True, normalization_type='z-score', warping_window=warping_window,
-            alpha=alpha, templates_results_file=results_file
+            template_sequences, template_labels, normalize=True, warping_window=warping_window, alpha=alpha,
+            templates_results_file=results_file
         )
         t2 = time.time()
         logger.info("Time taken for preprocessing the templates = %.2f seconds", t2 - t1)
@@ -111,8 +124,8 @@ def segment_and_plot_results(template_sequences, data_sequence, output_direc):
     # Perform segmentation of the data sequence
     data_segments, labels = segment_repeat_sequences(
         data_sequence, results['templates_normalized'], results['templates_info'], results['distance_thresholds'],
-        results['length_stats'], normalize=True, normalization_type='z-score', warping_window=warping_window,
-        length_step=length_step, offset_step=offset_step
+        results['length_stats'], normalize=True, warping_window=warping_window, length_step=length_step,
+        offset_step=offset_step, approx=approx
     )
     t2 = time.time()
     logger.info("Time taken for segmentation = %.2f seconds", t2 - t1)
@@ -138,14 +151,29 @@ def segment_and_plot_results(template_sequences, data_sequence, output_direc):
 
     # Plot the segmented sequence
     nc = len(COLORS_LIST)
+    check_legend = set()
     fig = plt.figure()
     for j in range(dim):
         ax1 = fig.add_subplot(dim, 1, j + 1)
         st = 0
         for lab, seg in zip(labels, data_segments):
+            # Adding legend only for the first subplot pane
+            if j == 0:
+                lab_str = str(template_labels[lab - 1][0][0]) if lab > 0 else 'No match'
+                if lab_str in check_legend:
+                    lab_str = None
+                else:
+                    check_legend.add(lab_str)
+            else:
+                lab_str = None
+
             en = st + seg.shape[0]
-            ax1.plot(np.arange(st, en), seg[:, j], linestyle='--', color=COLORS_LIST[lab % nc],
-                     marker='.', markersize=4)
+            if lab_str:
+                ax1.plot(np.arange(st, en), seg[:, j], linestyle='--', color=COLORS_LIST[lab % nc],
+                         marker='.', markersize=4, label=lab_str)
+            else:
+                ax1.plot(np.arange(st, en), seg[:, j], linestyle='--', color=COLORS_LIST[lab % nc],
+                         marker='.', markersize=4)
             st = en
 
         if j == (dim - 1):
@@ -154,6 +182,7 @@ def segment_and_plot_results(template_sequences, data_sequence, output_direc):
         ax1.set_ylabel(r"$x_{}[t]$".format(j + 1), fontsize=10, fontweight='bold', rotation=0)
         if j == 0:
             ax1.set_title('Sequence segmentation result', fontsize=10, fontweight='bold')
+            ax1.legend(loc='best', fontsize=8)
 
     plt.plot()
     plot_file = os.path.join(output_direc, 'sequence_segmented_plot.png')
@@ -162,11 +191,11 @@ def segment_and_plot_results(template_sequences, data_sequence, output_direc):
 
 def main():
     # Generate synthetic template data and the test data sequence
-    template_sequences, data_sequence = generate_test_data()
+    template_sequences, template_labels, data_sequence = generate_test_data()
 
     # Perform segmentation of the data sequence and plot the results
     output_direc = os.path.join(os.getcwd(), 'results')
-    segment_and_plot_results(template_sequences, data_sequence, output_direc)
+    segment_and_plot_results(template_sequences, template_labels, data_sequence, output_direc)
 
 
 if __name__ == '__main__':

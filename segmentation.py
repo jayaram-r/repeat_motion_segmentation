@@ -16,12 +16,13 @@ import pickle
 from functools import partial
 from scipy import stats
 from itertools import combinations
-from numba import jit, prange
-from tslearn.metrics import njit_dtw
+from numba import jit
+from tslearn.metrics import njit_dtw, prange
 import logging
 from repeat_motion_segmentation.utils import (
-    normalize_maxmin,
-    num_templates_to_sample
+    num_templates_to_sample,
+    sakoe_chiba_mask,
+    stratified_sample
 )
 
 
@@ -125,35 +126,6 @@ def average_lb_distance_to_templates2(sequence, templates, templates_info):
 
 
 @jit(nopython=True)
-def sakoe_chiba_mask(sz1, sz2, warping_window):
-    """
-    Slightly modified version of the Sakoe-Chiba mask computed in the `tslearn` library.
-
-    :param sz1: (int) length of the first time series.
-    :param sz2: (int) length of the second time series.
-    :param warping_window: float in [0, 1] specifying the warping window as a fraction.
-
-    :return: boolean array of shape (sz1, sz2).
-    """
-    # The warping window cannot be smaller than the difference between the length of the sequences
-    w = max(int(np.ceil(warping_window * max(sz1, sz2))),
-            abs(sz1 - sz2) + 1)
-    mask = np.full((sz1, sz2), np.inf)
-    if sz1 <= sz2:
-        for i in prange(sz1):
-            lower = max(0, i - w)
-            upper = min(sz2, i + w) + 1
-            mask[i, lower:upper] = 0.
-    else:
-        for i in prange(sz2):
-            lower = max(0, i - w)
-            upper = min(sz1, i + w) + 1
-            mask[lower:upper, i] = 0.
-
-    return mask
-
-
-@jit(nopython=True)
 def average_distance_to_templates(sequence, templates, warping_window):
     len_seq = sequence.shape[0]
     val_min = np.inf
@@ -178,70 +150,9 @@ def average_distance_to_templates(sequence, templates, warping_window):
     return val_min, label
 
 
-def helper_dtw_distance(sequence, templates, warping_window, index_tuple):
-    t = templates[index_tuple[0]][index_tuple[1]]
-    len_seq = sequence.shape[0]
-    len_temp = t.shape[0]
-
-    if warping_window is None:
-        mask = np.zeros((len_seq, len_temp))
-    else:
-        # The warping window cannot be smaller than the difference between the length of the sequences
-        w = max(int(np.ceil(warping_window * max(len_seq, len_temp))),
-                abs(len_seq - len_temp) + 1)
-        mask = np.full((len_seq, len_temp), np.inf)
-        ind_diff = np.abs(np.outer(np.arange(len_seq), np.ones(len_temp)) -
-                          np.outer(np.ones(len_seq), np.arange(len_temp)))
-        mask[ind_diff <= w] = 0.
-
-    d = njit_dtw(sequence, t, mask=mask) / float(len_seq + len_temp)
-
-    return index_tuple[0], index_tuple[1], d
-
-
-def average_distance_to_templates_parallel(sequence, templates, warping_window, num_proc):
-    num_actions = len(templates)
-    indices = [(i, j) for i in range(num_actions) for j in range(len(templates[i]))]
-    helper_partial = partial(helper_dtw_distance, sequence, templates, warping_window)
-    pool_obj = multiprocessing.Pool(processes=num_proc)
-    results = []
-    _ = pool_obj.map_async(helper_partial, indices, chunksize=None, callback=results.extend)
-    pool_obj.close()
-    pool_obj.join()
-
-    avg_dist = np.zeros(num_actions)
-    cnt = np.zeros(num_actions)
-    for tup in results:
-        avg_dist[tup[0]] += tup[2]
-        cnt[tup[0]] += 1.0
-
-    avg_dist = avg_dist / np.clip(cnt, 1e-6, None)
-    label = np.argmin(avg_dist)
-
-    return avg_dist[label], label + 1
-
-
-def normalize_subsequence(sequence, m, sequence_mean, sequence_stdev, sequence_min, sequence_max,
-                          normalize, normalization_type):
-    if normalize:
-        if normalization_type == 'z-score':
-            sequence_norm = (sequence[:m, :] - sequence_mean[m - 1, :]) / sequence_stdev[m - 1, :]
-        else:
-            # Max-min normalization
-            mask = sequence_max[m - 1, :] > sequence_min[m - 1, :]
-            sequence_norm = np.ones_like(sequence[:m, :])
-            if np.any(mask):
-                sequence_norm[:, mask] = ((sequence[:m, mask] - sequence_min[m - 1, mask]) /
-                                          (sequence_max[m - 1, mask] - sequence_min[m - 1, mask]))
-
-    else:
-        sequence_norm = sequence[:m, :]
-
-    return sequence_norm
-
-
+@jit(nopython=True)
 def search_subsequence(sequence, templates, templates_info, min_length, max_length, normalize=True,
-                       normalization_type='z-score', warping_window=None, use_lower_bounds=True, length_step=1):
+                       warping_window=None, use_lower_bounds=True, length_step=1):
     """
     Search for the subsequence that leads to minimum average DTW distance to the template sequences.
 
@@ -253,7 +164,6 @@ def search_subsequence(sequence, templates, templates_info, min_length, max_leng
     :param min_length: minimum length of the subsequence to search.
     :param max_length: maximum length of the subsequence to search.
     :param normalize: Apply normalization to the templates and the data subsequences, if set to True.
-    :param normalization_type: Type of normalization to apply. Should be set to 'z-score' or 'max-min'.
     :param warping_window: Size of the warping window used to constrain the DTW matching path. This is also know as
                            the Sakoe-Chiba band in DTW literature. This can be set to `None` if no warping window
                            constraint is to be applied; else it should be set to a fractional value in (0, 1]. The
@@ -272,51 +182,56 @@ def search_subsequence(sequence, templates, templates_info, min_length, max_leng
                  the matched action,
              -- `label_best` is the label of the best-matching template.
     """
+    dim = sequence.shape[1]
     N = sequence.shape[0]
-    max_length = min(N, max_length)
+    if N > max_length:
+        # Truncate the sequence at `max_length` since the rest of the sequence is not needed
+        sequence = sequence[:max_length]
+        N = max_length
+    else:
+        max_length = N
+
     if min_length >= max_length:
         min_length = max(1, max_length - 1)
 
-    # Setting `num_proc = 1` because the function `njit_dtw` uses `numba`, which runs very slowly when run in
-    # parallel using multiprocessing. This could be because `numba` performs the just-in-time compilation during the
-    # first run, which makes all the processes run slowly the first time.
-    # num_proc = max(1, multiprocessing.cpu_count() - 1)
-    num_proc = 1
-    if num_proc > 1:
-        parallel = True
-    else:
-        parallel = False
-
-    sequence_min = None
-    sequence_max = None
-    sequence_mean = None
-    sequence_stdev = None
     if normalize:
-        if normalization_type == 'z-score':
-            # Calculate the rolling mean and standard-deviation of the entire data sequence. This will be used
-            # for z-score normalization of subsequences of different lengths
-            den = np.arange(1, N + 1).astype(np.float)[:, np.newaxis]
-            sequence_mean = np.cumsum(sequence, axis=0) / den
-            arr = (sequence - sequence_mean) ** 2
-            sequence_stdev = np.sqrt(np.clip(np.cumsum(arr, axis=0) / den, 1e-16, None))
-        else:
-            # Calculate the rolling maximum and minimum of the entire data sequence. This will be used in
-            # the max-min normalization of subsequences of different lengths
-            sequence_min = np.minimum.accumulate(sequence, axis=0)
-            sequence_max = np.maximum.accumulate(sequence, axis=0)
+        # Calculate the rolling mean and standard-deviation of the entire data sequence. This will be used
+        # for z-score normalization of subsequences of different lengths.
+        den = np.arange(1, N + 1)
+        sequence_mean = np.zeros((N, dim))
+        sequence_stdev = np.zeros((N, dim))
+        for j in prange(dim):
+            sequence_mean[:, j] = np.cumsum(sequence[:, j]) / den
+            sequence_stdev[:, j] = np.sqrt(1e-16 +
+                                           np.cumsum((sequence[:, j] - sequence_mean[:, j]) ** 2) / den)
+
+        """
+        # Not using this approach because `numba` fails when `np.cumsum` is used with the argument `axis=0`.
+        den = np.arange(1, N + 1).reshape((N, 1))
+        sequence_mean = np.cumsum(sequence, axis=0) / den
+        arr = (sequence - sequence_mean) ** 2
+        sequence_stdev = np.sqrt(1e-16 + np.cumsum(arr, axis=0) / den)
+        """
+    else:
+        # This will not be used
+        sequence_mean = sequence
+        sequence_stdev = sequence
 
     # The middle value between `min_length` and `max_length` is used as the first value in the search range.
     # The rest of the values are randomized in order to take advantage of the lower bound based pruning
     mid_length = int(np.round(0.5 * (min_length + max_length)))
-    length_range = set(range(min_length, max_length + 1, length_step)) - {mid_length}
-    length_range = np.insert(np.random.permutation(list(length_range)), 0, mid_length)
+    v = np.random.permutation(np.arange(min_length, max_length + 1, length_step))
+    length_range = [mid_length] + list(v[v != mid_length])
 
     len_best = mid_length
     label_best = 0
     d_min = np.inf
     for m in length_range:
-        sequence_norm = normalize_subsequence(sequence, m, sequence_mean, sequence_stdev, sequence_min,
-                                              sequence_max, normalize, normalization_type)
+        if normalize:
+            sequence_norm = (sequence[:m, :] - sequence_mean[m - 1, :]) / sequence_stdev[m - 1, :]
+        else:
+            sequence_norm = sequence[:m, :]
+
         if use_lower_bounds:
             # Cascading lower bound distances to the DTW for fast pruning of bad (non-match) sequences.
             # Lower bound 1 based on comparison of only the first and last values of the sequence and template.
@@ -331,12 +246,7 @@ def search_subsequence(sequence, templates, templates_info, min_length, max_leng
             if d_lb2 > d_min:
                 continue
 
-        if parallel:
-            d, label = average_distance_to_templates_parallel(sequence_norm, templates, warping_window, num_proc)
-        else:
-            d, label = average_distance_to_templates(sequence_norm, templates, warping_window)
-
-        # logger.info("Length %d", m)
+        d, label = average_distance_to_templates(sequence_norm, templates, warping_window)
         if d < d_min:
             d_min = d
             label_best = label
@@ -352,7 +262,8 @@ def helper_average_dtw_distance(sequences, warping_window, indices):
     return d_avg
 
 
-def find_distance_thresholds(templates, templates_info, warping_window, max_num_samples=10000, seed=1234):
+def find_distance_thresholds(templates, template_labels, templates_info, warping_window, max_num_samples=10000,
+                             seed=1234):
     """
     For each action category, we find an upper threshold on the average DTW distance that will help filter out
     segments of the time series that are bad matches.
@@ -381,7 +292,8 @@ def find_distance_thresholds(templates, templates_info, warping_window, max_num_
 
     The 99-th percentile of the distances is calculated as the upper threshold.
 
-    :param templates: see function `segment_repeat_sequences`.
+    :param templates: see function `preprocess_templates`.
+    :param template_labels: see function `preprocess_templates`.
     :param templates_info: see function `segment_repeat_sequences`.
     :param warping_window: see function `segment_repeat_sequences`.
     :param max_num_samples: If `n` is larger than 13, the number of combinations can become very large. This sets an
@@ -392,6 +304,8 @@ def find_distance_thresholds(templates, templates_info, warping_window, max_num_
     - distance_thresholds: List of distance thresholds, one for each action.
     - templates_selected: Selected subset of normalized template sequences per action. A tuple of tuples, where each
                           element of inner tuple is a 2d numpy array with the template sequences.
+    - template_labels_selected: Labels of the selected template sequences per action. A tuple of tuples, where each
+                                element of the inner tuple is the label.
     - templates_info_selected: Information about the selected subset of template sequences per action. A tuple of
                                tuples, where each element of inner tuple is a namedtuple of type `template_info_tuple`.
     """
@@ -399,6 +313,7 @@ def find_distance_thresholds(templates, templates_info, warping_window, max_num_
     num_proc = max(1, multiprocessing.cpu_count() - 1)
 
     templates_selected = []
+    template_labels_selected = []
     templates_info_selected = []
     distance_thresholds = []
     num_templates = dict()
@@ -412,9 +327,12 @@ def find_distance_thresholds(templates, templates_info, warping_window, max_num_
             num_templates[n] = (k, ns)
 
         logger.info("Action %d:", i + 1)
-        logger.info("Selecting %d out of %d templates for matching based on average DTW distance", k, n)
-        ind = np.random.permutation(n)[:k]
+        logger.info("Selecting %d out of %d templates for matching based on DTW distance", k, n)
+
+        labels_group = np.array([tup[1] for tup in template_labels[i]])
+        ind = stratified_sample(labels_group, n, k)
         templates_selected.append(tuple([templates[i][j] for j in ind]))
+        template_labels_selected.append(tuple([template_labels[i][j] for j in ind]))
         templates_info_selected.append(tuple([templates_info[i][j] for j in ind]))
 
         comb_list = list(combinations(range(n - 1), k))
@@ -452,20 +370,21 @@ def find_distance_thresholds(templates, templates_info, warping_window, max_num_
                            distances.shape[0])
 
         # Using the 1.5 IQR rule for the upper threshold on distances
-        v = np.percentile(distances, [0, 25, 50, 75, 99.9])
+        v = np.percentile(distances, [0, 25, 50, 75, 100])
         th = max(v[4], v[3] + 1.5 * (v[3] - v[1]))
         distance_thresholds.append(th)
         logger.info("Upper threshold on distance DTW distance = %.6f", distance_thresholds[-1])
-        # logger.info("Min = %.6f, Median = %.6f, Max = %.6f", v[0], v[2], v[4])
+        logger.info("Min = %.6f, Median = %.6f, Max = %.6f", v[0], v[2], v[4])
 
     # Converting to tuple since it helps with numba compilation in `nopython` mode
     templates_selected = tuple(templates_selected)
+    template_labels_selected = tuple(template_labels_selected)
     templates_info_selected = tuple(templates_info_selected)
 
-    return distance_thresholds, templates_selected, templates_info_selected
+    return distance_thresholds, templates_selected, template_labels_selected, templates_info_selected
 
 
-def normalize_templates(templates, alpha, normalize=True, normalization_type='z-score'):
+def normalize_templates(templates, alpha, normalize=True):
     """
     Normalize the template sequences if required and save some information (length, minimum, and maximum) of each
     of the template sequences.
@@ -473,7 +392,6 @@ def normalize_templates(templates, alpha, normalize=True, normalization_type='z-
     :param templates: see function `segment_repeat_sequences`.
     :param alpha: see function `segment_repeat_sequences`.
     :param normalize: see function `segment_repeat_sequences`.
-    :param normalization_type: see function `segment_repeat_sequences`.
 
     :return: (templates_norm, templates_info, length_stats)
     - templates_norm: list of normalized template sequences with the same format as `templates`.
@@ -485,8 +403,6 @@ def normalize_templates(templates, alpha, normalize=True, normalization_type='z-
     """
     num_actions = len(templates)
     logger.info("Number of actions defined by the templates = %d.", num_actions)
-    if normalize:
-        logger.info("Applying '%s' normalization to the template sequences.", normalization_type)
 
     min_length = np.inf
     max_length = -np.inf
@@ -512,10 +428,7 @@ def normalize_templates(templates, alpha, normalize=True, normalization_type='z-
         templates_info[i] = [[]] * num_templates
         for j in range(num_templates):
             if normalize:
-                if normalization_type == 'z-score':
-                    arr = stats.zscore(templates[i][j], axis=0)
-                else:
-                    arr = normalize_maxmin(templates[i][j])
+                arr = stats.zscore(templates[i][j], axis=0)
             else:
                 arr = templates[i][j]
 
@@ -530,15 +443,17 @@ def normalize_templates(templates, alpha, normalize=True, normalization_type='z-
     return templates_norm, templates_info, length_stats
 
 
-def preprocess_templates(templates, normalize=True, normalization_type='z-score', warping_window=None, alpha=0.75,
-                         templates_results_file=None):
+def preprocess_templates(templates, template_labels, normalize=True, warping_window=None,
+                         alpha=0.75, templates_results_file=None):
     """
     Normalize the template sequences and calculate thresholds on the average DTW distance.
 
     :param templates: list `[L_1, . . ., L_k]`, where each `L_i` is another list `L_i = [s_i1, . . ., s_im]`, and
                       each `s_ij` is a numpy array (of shape (M, d)) corresponding to a template sequence.
+    :param template_labels: list `[L_1, . . ., L_k]`, where each `L_i` is another list `L_i = [s_i1, . . ., s_im]`,
+                            and each `s_ij` is a tuple corresponding to a template sequence. The tuple consists of
+                            the label and an additional category, e.g. the speed of rotation.
     :param normalize: see function `segment_repeat_sequences`.
-    :param normalization_type: see function `segment_repeat_sequences`.
     :param warping_window: see function `segment_repeat_sequences`.
     :param alpha: float value in the range `(0, 1)`, but recommended to be in the range `[0.5, 0.8]`. This value
                   controls the search range for the subsequence length. If `m` is the median length of the template
@@ -552,30 +467,25 @@ def preprocess_templates(templates, normalize=True, normalization_type='z-score'
                                    consuming) repeatedly on multiple runs.
 
     :return results: A dict with the following keys described below:
-                     {'templates_normalized', 'templates_info', 'distance_thresholds', 'length_stats'}
-
     - templates_normalized: Selected subset of normalized template sequences per action. A tuple of tuples, where
                             each element of inner tuple is a 2d numpy array with the template sequences.
+    - template_labels: Labels of the selected template sequences per action. A tuple of tuples, where each
+                       element of the inner tuple is the label.
     - templates_info: Information about the selected subset of template sequences per action. A tuple of tuples,
                       where each element of inner tuple is a namedtuple of type `template_info_tuple`.
     - distance_thresholds: list of upper thresholds on the average DTW distance, one for each action.
     - length_stats: see function `normalize_templates`.
     """
-    if normalization_type not in ('z-score', 'max-min'):
-        raise ValueError("Invalid value '{}' for the parameter 'normalization_type'.".format(normalization_type))
+    templates_norm, templates_info, length_stats = normalize_templates(templates, alpha, normalize=normalize)
 
-    templates_norm, templates_info, length_stats = normalize_templates(
-        templates, alpha, normalize=normalize, normalization_type=normalization_type
-    )
-
-    logger.info("Calculating the upper threshold on the average DTW distance for each action based on the "
-                "given template sequences.")
-    distance_thresholds, templates_norm_selected, templates_info_selected = find_distance_thresholds(
-        templates_norm, templates_info, warping_window
-    )
+    logger.info("Calculating the upper threshold on the DTW distance for each action based on the given "
+                "template sequences.")
+    distance_thresholds, templates_norm_selected, template_labels_selected, templates_info_selected = \
+        find_distance_thresholds(templates_norm, template_labels, templates_info, warping_window)
 
     results = {
         'templates_normalized': templates_norm_selected,
+        'template_labels': template_labels_selected,
         'templates_info': templates_info_selected,
         'distance_thresholds': distance_thresholds,
         'length_stats': length_stats
@@ -588,9 +498,8 @@ def preprocess_templates(templates, normalize=True, normalization_type='z-score'
     return results
 
 
-def segment_repeat_sequences(data, templates_norm, templates_info, distance_thresholds, length_stats,
-                             normalize=True, normalization_type='z-score', warping_window=None,
-                             length_step=1, offset_step=1):
+def segment_repeat_sequences(data, templates_norm, templates_info, distance_thresholds, length_stats, normalize=True,
+                             warping_window=None, length_step=1, offset_step=1, approx=False):
     """
     Segment the sequence `data` to closely match the sequences specified in the list `templates_norm`.
 
@@ -606,7 +515,6 @@ def segment_repeat_sequences(data, templates_norm, templates_info, distance_thre
     :param length_stats: tuple `(min_length, median_length, max_length)` referring to the length of the
                          template subsequences.
     :param normalize: Apply normalization to the templates and the data subsequences, if set to True.
-    :param normalization_type: Type of normalization to apply. Should be set to 'z-score' or 'max-min'.
     :param warping_window: Size of the warping window used to constrain the DTW matching path. This is also know as
                            the Sakoe-Chiba band in DTW literature. This can be set to `None` if no warping window
                            constraint is to be applied; else it should be set to a fractional value in (0, 1]. The
@@ -618,6 +526,7 @@ def segment_repeat_sequences(data, templates_norm, templates_info, distance_thre
                            the DTW calculation significantly.
     :param length_step: (int) length search is done in increments of this step. Default value is 1.
     :param offset_step: (int) offset search is done in increments of this step. Default value is 1.
+    :param approx: set to True to enable a coarse but faster search over the offsets.
 
     :return: (data_segments, labels)
         - data_segments: list of segmented subsequences, each of which are numpy arrays of shape (m, d) (`m` can be
@@ -644,7 +553,7 @@ def segment_repeat_sequences(data, templates_norm, templates_info, distance_thre
         while (data_rem.shape[0] - offset) > min_length:
             m, d_avg, label = search_subsequence(
                 data_rem[offset:, :], templates_norm, templates_info, min_length, max_length, normalize=normalize,
-                normalization_type=normalization_type, warping_window=warping_window, length_step=length_step
+                warping_window=warping_window, length_step=length_step
             )
             if d_avg <= distance_thresholds[label - 1]:
                 if match:
@@ -664,8 +573,15 @@ def segment_repeat_sequences(data, templates_norm, templates_info, distance_thre
                     match = True
                     info_best = [offset, m, d_avg, label]
 
-            # logger.info("offset = %d, match = %d", offset, int(match))
-            offset += offset_step
+            logger.info("offset = %d, match = %d", offset, int(match))
+            if match:
+                offset += offset_step
+            else:
+                if approx:
+                    offset += (5 * offset_step)
+                else:
+                    offset += offset_step
+
             if match:
                 # Terminate if either of the conditions below is satisfied:
                 # 1. Offset exceeds the last index of the best subsequence found so far.
