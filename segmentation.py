@@ -421,7 +421,7 @@ def find_distance_thresholds(templates, template_labels, templates_info, warping
                            distances.shape[0])
 
         # Using the 1.5 IQR rule for the upper threshold on distances
-        v = np.percentile(distances, [0, 25, 50, 75, 99.8])
+        v = np.percentile(distances, [0, 25, 50, 75, 100])
         th = max(v[4], v[3] + 1.5 * (v[3] - v[1]))
         distance_thresholds.append(th)
         logger.info("Upper threshold on the DTW distance to templates = %.6f", distance_thresholds[-1])
@@ -640,7 +640,7 @@ def segment_repeat_sequences(data, templates_norm, templates_info, template_coun
                             offset = offset_new
                             continue
 
-            logger.info("Offset = %d, match = %d", offset, match)
+            logger.info("Offset = {}, match = {}".format(offset, match))
             if match:
                 offset += offset_step
                 # Terminate if either of the conditions below is satisfied:
