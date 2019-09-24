@@ -76,6 +76,39 @@ def generate_test_data():
     return template_sequences, template_labels, data_sequence
 
 
+def plot_templates(templates, template_labels, output_direc):
+    if not os.path.isdir(output_direc):
+        os.makedirs(output_direc)
+
+    for i in range(len(templates)):
+        direc = os.path.join(output_direc, template_labels[i][0][0])
+        if not os.path.isdir(direc):
+            os.makedirs(direc)
+
+        for j in range(len(templates[i])):
+            seq = templates[i][j]
+            lab = template_labels[i][j]
+            lab_str = "{}, {}".format(lab[0], lab[1])
+            dim = seq.shape[1]
+
+            fig = plt.figure()
+            index_vals = np.arange(seq.shape[0])
+            for k in range(dim):
+                ax1 = fig.add_subplot(dim, 1, k + 1)
+                ax1.plot(index_vals, seq[:, k], linestyle='--', color='g', marker='.', markersize=4)
+                if k == (dim - 1):
+                    ax1.set_xlabel("time index (t)", fontsize=10, fontweight='bold')
+
+                ax1.set_ylabel(r"$x_{}[t]$".format(k + 1), fontsize=10, fontweight='bold', rotation=0)
+                if k == 0:
+                    ax1.set_title(lab_str, fontsize=10, fontweight='bold')
+
+            plt.plot()
+            plot_file = os.path.join(direc, '{}_{}_{:d}.png'.format(lab[0], lab[1], j + 1))
+            fig.savefig(plot_file, dpi=600, bbox_inches='tight')
+            plt.close()
+
+
 def segment_and_plot_results(template_sequences, template_labels, data_sequence, output_direc, warping_window=0.25,
                              alpha=0.75, length_step=1, offset_step=1, max_overlap=10, approx=False):
     """
