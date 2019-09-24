@@ -110,7 +110,7 @@ def plot_templates(templates, template_labels, output_direc):
 
 
 def segment_and_plot_results(template_sequences, template_labels, data_sequence, output_direc, warping_window=0.25,
-                             alpha=0.75, length_step=1, offset_step=1, max_overlap=10, approx=False):
+                             normalize=True, alpha=0.75, length_step=1, offset_step=1, max_overlap=10, approx=False):
     """
 
     :param template_sequences: list of template sequences corresponding to each action.
@@ -145,7 +145,7 @@ def segment_and_plot_results(template_sequences, template_labels, data_sequence,
     if results is None:
         t1 = time.time()
         results = preprocess_templates(
-            template_sequences, template_labels, normalize=True, warping_window=warping_window, alpha=alpha,
+            template_sequences, template_labels, normalize=normalize, warping_window=warping_window, alpha=alpha,
             templates_results_file=results_file
         )
         t2 = time.time()
@@ -158,7 +158,7 @@ def segment_and_plot_results(template_sequences, template_labels, data_sequence,
     # Perform segmentation of the data sequence
     data_segments, labels = segment_repeat_sequences(
         data_sequence, results['templates_normalized'], results['templates_info'], results['template_counts'],
-        results['distance_thresholds'], results['length_stats'], normalize=True, warping_window=warping_window,
+        results['distance_thresholds'], results['length_stats'], normalize=normalize, warping_window=warping_window,
         length_step=length_step, offset_step=offset_step, max_overlap=max_overlap, approx=approx
     )
     t2 = time.time()
