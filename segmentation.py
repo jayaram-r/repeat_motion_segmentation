@@ -133,6 +133,9 @@ def fast_approx_matching(sequence, templates, templates_info, template_counts, w
         for j in range(template_counts[i + 1]):     # each template corresponding to this action
             temp = templates[i][j]
             temp_info = templates_info[i][j]
+            # Heuristic to speedup
+            if abs(len_seq - temp_info.length) > 300:
+                continue
 
             dev_first_last = np.sum((sequence[0, :] - temp_info.first_value) ** 2) + \
                              np.sum((sequence[-1, :] - temp_info.last_value) ** 2)
@@ -268,7 +271,7 @@ def search_subsequence(sequence, templates, templates_info, template_counts, min
 
         d, label = fast_approx_matching(sequence_norm, templates, templates_info, template_counts, warping_window,
                                         dist_min_prior=dist_min)
-        if d < dist_min:
+        if d < dist_min and label > 0:
             dist_min = d
             label_best = label
             len_best = m
@@ -637,7 +640,7 @@ def segment_repeat_sequences(data, templates_norm, templates_info, template_coun
                             offset = offset_new
                             continue
 
-            # logger.info("Offset = %d, match = %d", offset, int(match))
+            logger.info("Offset = %d, match = %d", offset, match)
             if match:
                 offset += offset_step
                 # Terminate if either of the conditions below is satisfied:
