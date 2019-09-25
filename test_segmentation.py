@@ -110,7 +110,8 @@ def plot_templates(templates, template_labels, output_direc):
 
 
 def segment_and_plot_results(template_sequences, template_labels, data_sequence, output_direc, warping_window=0.25,
-                             normalize=True, alpha=0.75, length_step=1, offset_step=1, max_overlap=10, approx=False):
+                             normalize=True, num_templates_to_select=5, length_step=1, offset_step=1,
+                             max_overlap=10, approx=False):
     """
 
     :param template_sequences: list of template sequences corresponding to each action.
@@ -120,7 +121,8 @@ def segment_and_plot_results(template_sequences, template_labels, data_sequence,
     :param output_direc: output directory name.
     :param warping_window: Value in (0, 1] specifying the size of the Sakoe-Chiba band used for constraining the DTW
                            paths.
-    :param alpha: float value in (0, 1] that controls the search range of the subsequence length.
+    :param normalize: Set to True in order to apply z-score normalization.
+    :param num_templates_to_select: Number of templates to select for segmentation and matching.
     :param length_step: (int) length search is done in increments of this step. Default value is 1.
     :param offset_step: (int) offset search is done in increments of this step. Default value is 1.
     :param max_overlap: (int) maximum allowed overlap between successive segments. Set to 0 for no overlap.
@@ -145,8 +147,8 @@ def segment_and_plot_results(template_sequences, template_labels, data_sequence,
     if results is None:
         t1 = time.time()
         results = preprocess_templates(
-            template_sequences, template_labels, normalize=normalize, warping_window=warping_window, alpha=alpha,
-            templates_results_file=results_file
+            template_sequences, template_labels, normalize=normalize, warping_window=warping_window,
+            num_templates_to_select=num_templates_to_select, templates_results_file=results_file
         )
         t2 = time.time()
         logger.info("Time taken for preprocessing the templates = %.2f seconds", t2 - t1)

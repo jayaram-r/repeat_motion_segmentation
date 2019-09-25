@@ -79,20 +79,23 @@ def normalize_maxmin(x):
     return y
 
 
-def num_templates_to_sample(n):
+def find_max_combinations(n, k=None):
     """
     Given `n` templates, what is the number of templates `k` to sample such that the term
     n choose(n - 1, k) is maximized.
 
     :param n: (int) number of templates.
+    :param k: int or None. Specify the value of `k`. If set to None, the value that maximizes `n choose(n - 1, k)` is
+              found.
     :return:
     """
     # Adding a small value to break ties and give preference to the larger `k` in case of ties
-    vals = {k: (n * scipy.special.comb(n - 1, k) + 1e-6 * k) for k in range(1, n - 1)}
-    k_max = max(vals, key=vals.get)
-    v_max = int(np.floor(vals[k_max]))
+    vals = {i: (n * scipy.special.comb(n - 1, i) + 1e-6 * i) for i in range(1, n)}
+    if k not in vals:
+        k = max(vals, key=vals.get)
 
-    return k_max, v_max
+    v = int(np.floor(vals[k]))
+    return k, v
 
 
 @jit(nopython=True)
