@@ -16,8 +16,8 @@ import pickle
 from functools import partial
 from scipy import stats
 from itertools import combinations
-from numba import jit
-from tslearn.metrics import njit_dtw, prange
+from numba import jit, prange
+from tslearn.metrics import njit_dtw
 import logging
 from repeat_motion_segmentation.utils import (
     find_max_combinations,
