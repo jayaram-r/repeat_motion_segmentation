@@ -17,7 +17,8 @@ import operator
 from functools import partial
 from scipy import stats
 from itertools import combinations
-from numba import jit, prange
+from numba import jit, prange, float64, int64
+from numba.types import UniTuple
 from tslearn.metrics import njit_dtw
 import logging
 from repeat_motion_segmentation.utils import (
@@ -180,7 +181,19 @@ def fast_approx_matching(sequence, templates, templates_info, template_counts, f
     return dist_min, label
 
 
-# @jit(nopython=True)
+@jit(UniTuple(float64[:, :], 2)(float64[:, :], int64, int64), nopython=True)
+def normalization_stats(sequence, N, dim):
+    den = np.arange(1, N + 1)
+    sequence_mean = np.zeros((N, dim))
+    sequence_stdev = np.zeros((N, dim))
+    for j in prange(dim):
+        sequence_mean[:, j] = np.cumsum(sequence[:, j]) / den
+        sequence_stdev[:, j] = np.sqrt(1e-16 +
+                                       np.cumsum((sequence[:, j] - sequence_mean[:, j]) ** 2) / den)
+
+    return sequence_mean, sequence_stdev
+
+
 def search_subsequence(sequence, templates, templates_info, template_counts, feature_mask_per_action, min_length,
                        max_length, max_length_deviation, normalize=True, warping_window=None, length_step=1,
                        dist_min_prior=np.inf):
@@ -224,16 +237,7 @@ def search_subsequence(sequence, templates, templates_info, template_counts, fea
     if normalize:
         # Calculate the rolling mean and standard-deviation of the entire data sequence. This will be used
         # for z-score normalization of subsequences of different lengths.
-        """
-        # Use this approach if numba (the @jit decorator) is used
-        dim = sequence.shape[1]
-        den = np.arange(1, N + 1)
-        sequence_mean = np.zeros((N, dim))
-        sequence_stdev = np.zeros((N, dim))
-        for j in prange(dim):
-            sequence_mean[:, j] = np.cumsum(sequence[:, j]) / den
-            sequence_stdev[:, j] = np.sqrt(1e-16 +
-                                           np.cumsum((sequence[:, j] - sequence_mean[:, j]) ** 2) / den)
+        sequence_mean, sequence_stdev = normalization_stats(sequence, N, sequence.shape[1])
         """
         # Using this approach causes `numba` to fail because `np.cumsum` is used with the argument `axis=0`.
         # Use it if not using the @jit decorator
@@ -241,6 +245,7 @@ def search_subsequence(sequence, templates, templates_info, template_counts, fea
         sequence_mean = np.cumsum(sequence, axis=0) / den
         arr = (sequence - sequence_mean) ** 2
         sequence_stdev = np.sqrt(1e-16 + np.cumsum(arr, axis=0) / den)
+        """
     else:
         # This will not be used
         sequence_mean = sequence
@@ -316,8 +321,7 @@ def score_feature_selection(templates_same, templates_diff, warping_window, dim,
 
 def find_best_feature_subset(templates, warping_window=None, add_noise_sequences=True, bypass=False):
     """
-    Find the best subset of features to include for each action. Since this is doing a search over all possible
-    feature subsets, it should be used only for small number of features (less than 10).
+    Find the best subset of features to include for each action.
 
     :param templates: see function `segment_repeat_sequences`.
     :param warping_window: see function `segment_repeat_sequences`.
@@ -330,10 +334,7 @@ def find_best_feature_subset(templates, warping_window=None, add_noise_sequences
     """
     dim = templates[0][0].shape[1]
     num_actions = len(templates)
-    if dim == 1:
-        return tuple([np.array([True]) for _ in range(num_actions)])
-
-    if bypass:
+    if bypass or dim == 1:
         mask = np.ones(dim, dtype=np.bool)
         return tuple([mask for _ in range(num_actions)])
 
@@ -638,7 +639,7 @@ def preprocess_templates(templates, template_labels, normalize=True, warping_win
     templates_norm, templates_info, length_stats = normalize_templates(templates, normalize=normalize)
 
     logger.info("Selecting the best subset of features for each action:")
-    feature_mask_per_action = find_best_feature_subset(templates, warping_window=warping_window,
+    feature_mask_per_action = find_best_feature_subset(templates_norm, warping_window=warping_window,
                                                        add_noise_sequences=True, bypass=False)
 
     logger.info("Calculating the upper threshold on the DTW distance for each action based on the given "
@@ -726,8 +727,9 @@ def segment_repeat_sequences(data, templates_norm, templates_info, template_coun
     data_rem = copy.copy(data)
     while data_rem.shape[0] > min_length:
         offset = 0
-        info_best = [0, 0, max_threshold, 0]       # offset, sequence_length, min_distance, label
         match = 0
+        info_best = [0, 0, max_threshold, 0]       # offset, sequence_length, min_distance, label
+        d_min_prev = info_best[2]
         while (data_rem.shape[0] - offset) > min_length:
             m, d_min, label = search_subsequence(
                 data_rem[offset:, :], templates_norm, templates_info, template_counts, feature_mask_per_action,
@@ -759,7 +761,8 @@ def segment_repeat_sequences(data, templates_norm, templates_info, template_coun
                             offset = offset_new
                             continue
 
-            logger.info("Offset = {}, match = {}".format(offset, match))
+            del_dist = abs(info_best[2] - d_min_prev)
+            logger.info("Offset = {}, match = {}, delta_dist = {:.8f}".format(offset, match, del_dist))
             if match:
                 offset += offset_step
                 # Terminate if either of the conditions below is satisfied:
@@ -772,6 +775,8 @@ def segment_repeat_sequences(data, templates_norm, templates_info, template_coun
                     break
             else:
                 offset += (offset_step_approx if approx else offset_step)
+
+            d_min_prev = d_min
 
         if match:
             num_seg += 1
