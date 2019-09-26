@@ -309,7 +309,7 @@ def score_feature_selection(templates_same, templates_diff, warping_window, dim,
                                              mask_features=mask_features)
         dist_diff, _ = distance_to_templates(templates_same[i], templates_diff, warping_window,
                                              mask_features=mask_features)
-        score += (dist_same / max(dist_diff, 1e-16))
+        score += (dist_diff / max(dist_same, 1e-16))
 
     return index_features, score / cnt_same
 
@@ -334,13 +334,15 @@ def find_best_feature_subset(templates, warping_window=None, add_noise_sequences
         return feature_mask_per_action
 
     num_proc = max(1, multiprocessing.cpu_count() - 1)
+    """
     # List all possible feature subsets of size >= 1
     feature_subsets = []
     ind = range(dim)
     for sz in range(1, dim + 1):
         feature_subsets.extend(combinations(ind, sz))
+    """
+    feature_subsets = [(j, ) for j in range(dim)]
 
-    assert len(feature_subsets) == (2 ** dim - 1)
     noise_sequences = []
     if add_noise_sequences:
         num_noise_sequences = len(templates[0])
@@ -379,13 +381,21 @@ def find_best_feature_subset(templates, warping_window=None, add_noise_sequences
             scores = [score_feature_selection(templates_same, templates_diff, warping_window, dim, ind)
                       for ind in feature_subsets]
 
-        # Find the feature subset with minimum feature selection score
-        tup = min(scores, key=operator.itemgetter(1))
-        logger.info("Action {:d}: Best feature subset = ({}), Score = {:.6f}".format(
-            i + 1, ', '.join([str(j + 1) for j in tup[0]]), tup[1])
-        )
+        # Sort the features in decreasing order of score and find the normalized cumulative score.
+        # The normalized cumulative score is thresholded to select the top ranked features
+        scores_sorted = sorted(scores, key=operator.itemgetter(1), reverse=True)
+        u = np.cumsum([t[1] for t in scores_sorted])
+        v = (1. / u[-1]) * u
+        logger.info("Action %d:", i + 1)
+        logger.info("Ranked features and their normalized cumulative scores:")
+        for j in range(dim):
+            logger.info("%d, %.6f", scores_sorted[j][0][0], v[j])
+
+        ind_selected = [scores_sorted[j][0][0] for j in range(dim // 2)]
+        logger.info("Selected features = (%s).", ', '.join(map(str, ind_selected)))
+        logger.info("")
         feature_mask_per_action[i] = np.zeros(dim, dtype=np.bool)
-        feature_mask_per_action[i][list(tup[0])] = True
+        feature_mask_per_action[i][ind_selected] = True
 
     return tuple(feature_mask_per_action)
 
