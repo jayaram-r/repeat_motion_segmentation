@@ -160,8 +160,9 @@ def segment_and_plot_results(template_sequences, template_labels, data_sequence,
     # Perform segmentation of the data sequence
     data_segments, labels = segment_repeat_sequences(
         data_sequence, results['templates_normalized'], results['templates_info'], results['template_counts'],
-        results['distance_thresholds'], results['length_stats'], normalize=normalize, warping_window=warping_window,
-        length_step=length_step, offset_step=offset_step, max_overlap=max_overlap, approx=approx
+        results['feature_mask_per_action'], results['distance_thresholds'], results['length_stats'],
+        normalize=normalize, warping_window=warping_window, length_step=length_step, offset_step=offset_step,
+        max_overlap=max_overlap, approx=approx
     )
     t2 = time.time()
     logger.info("Time taken for segmentation = %.2f seconds", t2 - t1)
