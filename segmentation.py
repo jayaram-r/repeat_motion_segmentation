@@ -314,7 +314,7 @@ def score_feature_selection(templates_same, templates_diff, warping_window, dim,
     return index_features, score / cnt_same
 
 
-def find_best_feature_subset(templates, warping_window=None, add_noise_sequences=True):
+def find_best_feature_subset(templates, warping_window=None, add_noise_sequences=True, bypass=False):
     """
     Find the best subset of features to include for each action. Since this is doing a search over all possible
     feature subsets, it should be used only for small number of features (less than 10).
@@ -322,6 +322,7 @@ def find_best_feature_subset(templates, warping_window=None, add_noise_sequences
     :param templates: see function `segment_repeat_sequences`.
     :param warping_window: see function `segment_repeat_sequences`.
     :param add_noise_sequences: Set to True in order to include some noise sequences to the feature selection.
+    :param bypass: a boolean flag to bypass the feature selection step and include all features.
 
     :return feature_mask_per_action: tuple of boolean numpy arrays of length equal to the number of actions.
                                      Each boolean array has length equal to the number of features and indicates
@@ -330,8 +331,11 @@ def find_best_feature_subset(templates, warping_window=None, add_noise_sequences
     dim = templates[0][0].shape[1]
     num_actions = len(templates)
     if dim == 1:
-        feature_mask_per_action = tuple([np.array([True]) for _ in range(num_actions)])
-        return feature_mask_per_action
+        return tuple([np.array([True]) for _ in range(num_actions)])
+
+    if bypass:
+        mask = np.ones(dim, dtype=np.bool)
+        return tuple([mask for _ in range(num_actions)])
 
     num_proc = max(1, multiprocessing.cpu_count() - 1)
     """
@@ -635,7 +639,7 @@ def preprocess_templates(templates, template_labels, normalize=True, warping_win
 
     logger.info("Selecting the best subset of features for each action:")
     feature_mask_per_action = find_best_feature_subset(templates, warping_window=warping_window,
-                                                       add_noise_sequences=True)
+                                                       add_noise_sequences=True, bypass=False)
 
     logger.info("Calculating the upper threshold on the DTW distance for each action based on the given "
                 "template sequences.")
