@@ -112,8 +112,7 @@ def lb_distance_to_templates2(sequence, templates, templates_info):
 @jit(nopython=True, parallel=False)
 def fast_approx_matching(sequence, templates, templates_info, template_counts, feature_mask_per_action,
                          warping_window, max_length_deviation, dist_min_prior=np.inf):
-    len_seq = sequence.shape[0]
-    dim = sequence.shape[1]
+    len_seq, dim = sequence.shape
 
     # Maximum and minimum of the sequence along each dimension.
     # Not using `axis=0` argument for the numpy.min and numpy.max functions because it is not supported by numba
@@ -194,6 +193,15 @@ def normalization_stats(sequence, N, dim):
     return sequence_mean, sequence_stdev
 
 
+@jit(float64[:, :](float64[:, :], float64[:, :], float64[:, :], int64, int64), nopython=True)
+def normalize_sequence(sequence, sequence_mean, sequence_stdev, m, dim):
+    sequence_norm = np.zeros((m, dim))
+    for j in prange(dim):
+        sequence_norm[:, j] = (sequence[:m, j] - sequence_mean[m - 1, j]) / sequence_stdev[m - 1, j]
+
+    return sequence_norm
+
+
 def search_subsequence(sequence, templates, templates_info, template_counts, feature_mask_per_action, min_length,
                        max_length, max_length_deviation, normalize=True, warping_window=None, length_step=1,
                        dist_min_prior=np.inf):
@@ -223,7 +231,7 @@ def search_subsequence(sequence, templates, templates_info, template_counts, fea
                  the matched action,
              -- `label_best` is the label of the best-matching template.
     """
-    N = sequence.shape[0]
+    N, dim = sequence.shape
     if N > max_length:
         # Truncate the sequence at `max_length` since the rest of the sequence is not needed
         sequence = sequence[:max_length]
@@ -237,15 +245,13 @@ def search_subsequence(sequence, templates, templates_info, template_counts, fea
     if normalize:
         # Calculate the rolling mean and standard-deviation of the entire data sequence. This will be used
         # for z-score normalization of subsequences of different lengths.
-        sequence_mean, sequence_stdev = normalization_stats(sequence, N, sequence.shape[1])
-        """
-        # Using this approach causes `numba` to fail because `np.cumsum` is used with the argument `axis=0`.
-        # Use it if not using the @jit decorator
+        # sequence_mean, sequence_stdev = normalization_stats(sequence, N, dim)
+
+        # Pure numpy approach (without numba)
         den = np.arange(1, N + 1).reshape((N, 1))
         sequence_mean = np.cumsum(sequence, axis=0) / den
         arr = (sequence - sequence_mean) ** 2
         sequence_stdev = np.sqrt(1e-16 + np.cumsum(arr, axis=0) / den)
-        """
     else:
         # This will not be used
         sequence_mean = sequence
@@ -257,7 +263,8 @@ def search_subsequence(sequence, templates, templates_info, template_counts, fea
     dist_min = dist_min_prior
     for m in length_range:
         if normalize:
-            sequence_norm = (sequence[:m, :] - sequence_mean[m - 1, :]) / sequence_stdev[m - 1, :]
+            # sequence_norm = (sequence[:m, :] - sequence_mean[m - 1, :]) / sequence_stdev[m - 1, :]
+            sequence_norm = normalize_sequence(sequence, sequence_mean, sequence_stdev, m, dim)
         else:
             sequence_norm = sequence[:m, :]
 
@@ -668,7 +675,7 @@ def preprocess_templates(templates, template_labels, normalize=True, warping_win
 
 def segment_repeat_sequences(data, templates_norm, templates_info, template_counts, feature_mask_per_action,
                              distance_thresholds, length_stats, normalize=True, warping_window=None,
-                             length_step=1, offset_step=1, max_overlap=0, approx=False, seed=1234):
+                             length_step=1, offset_step=1, max_overlap=0, approx=False, seed=1234, eps_dist=5e-5):
     """
     Segment the sequence `data` to closely match the sequences specified in the list `templates_norm`.
 
@@ -702,6 +709,7 @@ def segment_repeat_sequences(data, templates_norm, templates_info, template_coun
     :param max_overlap: (int) maximum allowed overlap between successive segments. Set to 0 for no overlap.
     :param approx: set to True to enable a coarse but faster search over the offsets.
     :param seed: Seed of the random number generator.
+    :param eps_dist: Small value to check for convergence of DTW distance.
 
     :return: (data_segments, labels)
         - data_segments: list of segmented subsequences, each of which are numpy arrays of shape (m, d) (`m` can be
@@ -729,13 +737,13 @@ def segment_repeat_sequences(data, templates_norm, templates_info, template_coun
         offset = 0
         match = 0
         info_best = [0, 0, max_threshold, 0]       # offset, sequence_length, min_distance, label
-        d_min_prev = info_best[2]
         while (data_rem.shape[0] - offset) > min_length:
             m, d_min, label = search_subsequence(
                 data_rem[offset:, :], templates_norm, templates_info, template_counts, feature_mask_per_action,
                 min_length, max_length, max_length_deviation, normalize=normalize, warping_window=warping_window,
                 length_step=length_step, dist_min_prior=info_best[2]
             )
+            del_dist = 1.0
             if (label > 0) and (d_min <= distance_thresholds[label - 1]):
                 if match:
                     if label == info_best[3]:
@@ -743,6 +751,7 @@ def segment_repeat_sequences(data, templates_norm, templates_info, template_coun
                         if d_min < info_best[2]:
                             # Lower average DTW distance than the current best match
                             match += 1
+                            del_dist = info_best[2] - d_min
                             info_best = [offset, m, d_min, label]
 
                     else:
@@ -761,22 +770,24 @@ def segment_repeat_sequences(data, templates_norm, templates_info, template_coun
                             offset = offset_new
                             continue
 
-            del_dist = abs(info_best[2] - d_min_prev)
-            logger.info("Offset = {}, match = {}, delta_dist = {:.8f}".format(offset, match, del_dist))
+            logger.info("Offset = {}, match = {}, label = {}, delta_dist = {:.8f}".
+                        format(offset, match, info_best[3], del_dist))
             if match:
                 offset += offset_step
                 # Terminate if either of the conditions below is satisfied:
-                # 1. Offset exceeds the last index of the best subsequence found so far.
-                # 2. If a match has been found for a certain offset value, and a string of increasing values of
+                # 1. Drop in DTW distance from successive matches is very small.
+                # 2. Offset exceeds the last index of the best subsequence found so far.
+                # 3. If a match has been found for a certain offset value, and a string of increasing values of
                 #    the offset does not lead to a better match (lower average DTW), then we break in order to
                 #    speed up the search. The choice of 10 is heuristic.
                 #
                 if (offset - info_best[0]) > 10 or (offset - info_best[0]) >= (info_best[1] - 1):
                     break
+                if del_dist < eps_dist:
+                    break
+
             else:
                 offset += (offset_step_approx if approx else offset_step)
-
-            d_min_prev = d_min
 
         if match:
             num_seg += 1
