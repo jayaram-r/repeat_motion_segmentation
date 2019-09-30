@@ -279,14 +279,9 @@ def search_subsequence(sequence, templates, templates_info, template_counts, fea
     return len_best, dist_min, label_best
 
 
-@jit(nopython=True)
-def distance_to_templates(sequence, templates, warping_window, mask_features=None, add_noise=False):
+# @jit(nopython=True)
+def distance_to_templates(sequence, templates, warping_window, mask_features=None):
     len_seq = sequence.shape[0]
-    if add_noise:
-        for j in prange(sequence.shape[1]):
-            v = sequence[:, j]
-            sequence[:, j] = v + 1e-5 * np.ptp(v) * np.random.randn(len_seq)
-
     val_min = np.inf
     label = 0
     for i, t in enumerate(templates):
@@ -310,7 +305,7 @@ def distance_to_templates(sequence, templates, warping_window, mask_features=Non
     return val_min, label
 
 
-def score_feature_selection(templates_same, templates_diff, warping_window, dim, index_features):
+def score_feature_selection_distance_ratio(templates_same, templates_diff, warping_window, dim, index_features):
     mask_features = np.zeros(dim, dtype=np.bool)
     mask_features[list(index_features)] = True
     cnt_same = len(templates_same)
@@ -326,11 +321,14 @@ def score_feature_selection(templates_same, templates_diff, warping_window, dim,
     return index_features, score / cnt_same
 
 
-def find_best_feature_subset(templates, warping_window=None, add_noise_sequences=True, bypass=False):
+def find_best_feature_subset(templates, template_labels, features_per_action=None, warping_window=None,
+                             add_noise_sequences=True, bypass=False):
     """
     Find the best subset of features to include for each action.
 
     :param templates: see function `segment_repeat_sequences`.
+    :param template_labels: see function `segment_repeat_sequences`.
+    :param features_per_action: see function `preprocess_templates`.
     :param warping_window: see function `segment_repeat_sequences`.
     :param add_noise_sequences: Set to True in order to include some noise sequences to the feature selection.
     :param bypass: a boolean flag to bypass the feature selection step and include all features.
@@ -345,7 +343,22 @@ def find_best_feature_subset(templates, warping_window=None, add_noise_sequences
         mask = np.ones(dim, dtype=np.bool)
         return tuple([mask for _ in range(num_actions)])
 
-    num_proc = max(1, multiprocessing.cpu_count() - 1)
+    if features_per_action:
+        # Feature indices per action specified as input
+        feature_mask_per_action = [None] * num_actions
+        for i in range(num_actions):
+            lab = template_labels[i][0][0]
+            if lab in features_per_action:
+                ind = features_per_action[lab]
+            else:
+                ind = list(range(dim))
+
+            feature_mask_per_action[i] = np.zeros(dim, dtype=np.bool)
+            feature_mask_per_action[i][ind] = True
+            logger.info("Action %d: label = %s, features = (%s)", i + 1, lab, ', '.join(map(str, ind)))
+
+        return tuple(feature_mask_per_action)
+
     """
     # List all possible feature subsets of size >= 1
     feature_subsets = []
@@ -354,7 +367,7 @@ def find_best_feature_subset(templates, warping_window=None, add_noise_sequences
         feature_subsets.extend(combinations(ind, sz))
     """
     feature_subsets = [(j, ) for j in range(dim)]
-
+    num_proc = max(1, multiprocessing.cpu_count() - 1)
     noise_sequences = []
     if add_noise_sequences:
         num_noise_sequences = len(templates[0])
@@ -383,15 +396,16 @@ def find_best_feature_subset(templates, warping_window=None, add_noise_sequences
             templates_diff = tuple([tuple(templates[j]) for j in range(num_actions) if j != i])
 
         if num_proc > 1:
-            helper_partial = partial(score_feature_selection, templates_same, templates_diff, warping_window, dim)
+            helper_partial = partial(score_feature_selection_distance_ratio, templates_same, templates_diff,
+                                     warping_window, dim)
             pool_obj = multiprocessing.Pool(processes=num_proc)
             scores = []
             _ = pool_obj.map_async(helper_partial, feature_subsets, chunksize=None, callback=scores.extend)
             pool_obj.close()
             pool_obj.join()
         else:
-            scores = [score_feature_selection(templates_same, templates_diff, warping_window, dim, ind)
-                      for ind in feature_subsets]
+            scores = [score_feature_selection_distance_ratio(templates_same, templates_diff, warping_window,
+                                                             dim, ind) for ind in feature_subsets]
 
         # Sort the features in decreasing order of score and find the normalized cumulative score.
         # The normalized cumulative score is thresholded to select the top ranked features
@@ -530,13 +544,16 @@ def find_distance_thresholds(templates, template_labels, templates_info, feature
             logger.warning("Sample size of distances (%d) may be too small for reliable threshold estimation.",
                            distances.shape[0])
 
-        # A value slightly larger than the maximum distance and a the 1.5 IQR rule are calculated. The larger of the
-        # two is used as the threshold
-        v = np.percentile(distances, [0, 25, 50, 75, 100])
-        th = max(1.01 * v[4], v[3] + 1.5 * (v[3] - v[1]))
+        # To find the upper threshold, the `median + 3 MAD` is calculated, where MAD is the median absolute deviation
+        # of the distances from the median
+        perc = np.percentile(distances, [0, 25, 50, 75, 100])
+        # med_abs_dev = np.median(np.abs(distances - perc[2]))
+        # th = max(1.02 * perc[-1], perc[2] + 3 * med_abs_dev)
+        iqr = perc[3] - perc[1]
+        th = max(1.02 * perc[-1], perc[3] + 1.5 * iqr)
         distance_thresholds.append(th)
         logger.info("Upper threshold on the DTW distance to templates = %.6f", distance_thresholds[-1])
-        logger.info("Min = %.6f, Median = %.6f, Max = %.6f", v[0], v[2], v[4])
+        logger.info("Min = %.6f, Median = %.6f, Max = %.6f", perc[0], perc[2], perc[-1])
 
     # Converting to tuple since it helps with numba compilation in `nopython` mode
     templates_selected = tuple(templates_selected)
@@ -544,16 +561,19 @@ def find_distance_thresholds(templates, template_labels, templates_info, feature
     templates_info_selected = tuple(templates_info_selected)
     template_counts = np.array(template_counts, dtype=np.int)
 
-    return distance_thresholds, templates_selected, template_labels_selected, templates_info_selected, template_counts
+    return (distance_thresholds, templates_selected, template_labels_selected, templates_info_selected,
+            template_counts)
 
 
-def normalize_templates(templates, normalize=True):
+def normalize_templates(templates, normalize=True, min_length=2, max_length=1000000):
     """
     Normalize the template sequences if required and save some information (length, minimum, and maximum) of each
     of the template sequences.
 
     :param templates: see function `segment_repeat_sequences`.
     :param normalize: see function `segment_repeat_sequences`.
+    :param min_length: A minimum length can be specified to limit the search range.
+    :param max_length: A maximum length can be specified to limit the search range.
 
     :return: (templates_norm, templates_info, length_stats)
     - templates_norm: list of normalized template sequences with the same format as `templates`.
@@ -567,29 +587,25 @@ def normalize_templates(templates, normalize=True):
     num_actions = len(templates)
     logger.info("Number of actions defined by the templates = %d.", num_actions)
 
-    min_length = np.inf
-    max_length = -np.inf
-    max_length_deviation = [0] * num_actions
+    max_length_deviation = [0.] * num_actions
+    min_length_arr = [0.] * num_actions
+    max_length_arr = [0.] * num_actions
     templates_norm = [[]] * num_actions
     templates_info = [[]] * num_actions
     templates_length = []
     for i in range(num_actions):
         num_templates = len(templates[i])
-        len_arr = [a.shape[0] for a in templates[i]]
-        templates_length.extend(len_arr)
-        len_stats = np.percentile(len_arr, [0, 25, 50, 75, 100])
+        len_arr = np.array([a.shape[0] for a in templates[i]], dtype=np.float16)
+        perc = np.percentile(len_arr, [0, 25, 50, 75, 100])
+        templates_length.append(len_arr)
 
-        max_length_deviation[i] = int(np.ceil(1.1 * (len_stats[-1] - len_stats[0])))
+        max_length_deviation[i] = int(np.ceil(1.2 * (perc[-1] - perc[0])))
 
+        # med_abs_dev = np.median(np.abs(len_arr - perc[2]))
         # 1.5 times the interquartile range is used as the deviation
-        delta = 1.5 * (len_stats[3] - len_stats[1])
-        v = min(len_stats[0], max(2, len_stats[1] - delta))
-        if v < min_length:
-            min_length = v
-
-        v = max(len_stats[-1], len_stats[3] + delta)
-        if v > max_length:
-            max_length = v
+        iqr = perc[3] - perc[1]
+        min_length_arr[i] = min(perc[0], perc[1] - 1.5 * iqr)
+        max_length_arr[i] = max(perc[-1], perc[3] + 1.5 * iqr)
 
         templates_norm[i] = [[]] * num_templates
         templates_info[i] = [[]] * num_templates
@@ -607,14 +623,23 @@ def normalize_templates(templates, normalize=True):
 
     logger.info("Maximum length deviation between templates from each action: %s",
                 ', '.join(map(str, max_length_deviation)))
-    length_stats = [int(min_length), int(np.percentile(templates_length, 50)), int(max_length),
-                    max_length_deviation]
+    v = int(np.min(min_length_arr))
+    if v >= min_length:
+        min_length = v
+
+    v = int(np.max(max_length_arr))
+    if v <= max_length:
+        max_length = v
+
+    templates_length = np.concatenate(templates_length)
+    length_stats = [min_length, int(np.median(templates_length)), max_length, max_length_deviation]
 
     return templates_norm, templates_info, length_stats
 
 
-def preprocess_templates(templates, template_labels, normalize=True, warping_window=None,
-                         num_templates_to_select=None, templates_results_file=None, seed=1234):
+def preprocess_templates(templates, template_labels, features_per_action=None, normalize=True,
+                         warping_window=None, num_templates_to_select=None, templates_results_file=None,
+                         min_length=2, max_length=1000000, seed=1234):
     """
     Normalize the template sequences and calculate thresholds on the average DTW distance.
 
@@ -623,6 +648,9 @@ def preprocess_templates(templates, template_labels, normalize=True, warping_win
     :param template_labels: list `[L_1, . . ., L_k]`, where each `L_i` is another list `L_i = [s_i1, . . ., s_im]`,
                             and each `s_ij` is a tuple corresponding to a template sequence. The tuple consists of
                             the label and an additional category, e.g. the speed of rotation.
+    :param features_per_action: None or a dict mapping each action label to a list of feature indices
+                               (starting at 0) that are to be used for that action. If None, all the features will
+                               be used for all the actions.
     :param normalize: see function `segment_repeat_sequences`.
     :param warping_window: see function `segment_repeat_sequences`.
     :param num_templates_to_select: Number of templates to select. If set to None, this is automatically set to
@@ -630,6 +658,8 @@ def preprocess_templates(templates, template_labels, normalize=True, warping_win
     :param templates_results_file: Filename for the pickle file in which the processed template results will be
                                    saved. This can be used to avoid processing the templates (which can be time
                                    consuming) repeatedly on multiple runs.
+    :param min_length: A minimum length can be specified to limit the search range.
+    :param max_length: A maximum length can be specified to limit the search range.
     :param seed: Seed of the random number generator.
 
     :return results: A dict with the following keys described below:
@@ -643,12 +673,18 @@ def preprocess_templates(templates, template_labels, normalize=True, warping_win
     - length_stats: see function `normalize_templates`.
     """
     np.random.seed(seed)
-    templates_norm, templates_info, length_stats = normalize_templates(templates, normalize=normalize)
+    templates_norm, templates_info, length_stats = normalize_templates(templates, normalize=normalize,
+                                                                       min_length=min_length, max_length=max_length)
+    if features_per_action is None:
+        logger.info("Selecting the best subset of features for each action.")
+    else:
+        logger.info("Using the feature subsets per action specified as input.")
 
-    logger.info("Selecting the best subset of features for each action:")
-    feature_mask_per_action = find_best_feature_subset(templates_norm, warping_window=warping_window,
-                                                       add_noise_sequences=True, bypass=False)
 
+    feature_mask_per_action = find_best_feature_subset(
+        templates_norm, template_labels, features_per_action=features_per_action, warping_window=warping_window,
+        add_noise_sequences=True
+    )
     logger.info("Calculating the upper threshold on the DTW distance for each action based on the given "
                 "template sequences.")
     (distance_thresholds, templates_norm_selected, template_labels_selected, templates_info_selected,

@@ -109,9 +109,17 @@ def plot_templates(templates, template_labels, output_direc):
             plt.close()
 
 
-def segment_and_plot_results(template_sequences, template_labels, data_sequence, output_direc, warping_window=0.25,
-                             normalize=True, num_templates_to_select=5, length_step=1, offset_step=1,
-                             max_overlap=10, approx=False):
+def segment_and_plot_results(template_sequences, template_labels, data_sequence, output_direc,
+                             features_per_action=None,
+                             warping_window=0.25,
+                             normalize=True,
+                             num_templates_to_select=5,
+                             length_step=1,
+                             offset_step=1,
+                             max_overlap=10,
+                             min_length=2,
+                             max_length=1000000,
+                             approx=False):
     """
 
     :param template_sequences: list of template sequences corresponding to each action.
@@ -119,6 +127,9 @@ def segment_and_plot_results(template_sequences, template_labels, data_sequence,
     :param data_sequence: numpy array of shape `(N, d)` specifying the data sequence to be segmented. N is the
                           length and d is the dimension of the sequence.
     :param output_direc: output directory name.
+    :param features_per_action: None or a dict mapping each action label to a list of feature indices
+                               (starting at 0) that are to be used for that action. If None, all the features will
+                               be used for all the actions.
     :param warping_window: Value in (0, 1] specifying the size of the Sakoe-Chiba band used for constraining the DTW
                            paths.
     :param normalize: Set to True in order to apply z-score normalization.
@@ -126,6 +137,8 @@ def segment_and_plot_results(template_sequences, template_labels, data_sequence,
     :param length_step: (int) length search is done in increments of this step. Default value is 1.
     :param offset_step: (int) offset search is done in increments of this step. Default value is 1.
     :param max_overlap: (int) maximum allowed overlap between successive segments. Set to 0 for no overlap.
+    :param min_length: A minimum length can be specified to limit the search range.
+    :param max_length: A maximum length can be specified to limit the search range.
     :param approx: set to True to enable a coarse but faster search over the offsets.
 
     :return: None
@@ -147,8 +160,9 @@ def segment_and_plot_results(template_sequences, template_labels, data_sequence,
     if results is None:
         t1 = time.time()
         results = preprocess_templates(
-            template_sequences, template_labels, normalize=normalize, warping_window=warping_window,
-            num_templates_to_select=num_templates_to_select, templates_results_file=results_file
+            template_sequences, template_labels, features_per_action=features_per_action, normalize=normalize,
+            warping_window=warping_window, num_templates_to_select=num_templates_to_select,
+            templates_results_file=results_file, min_length=min_length, max_length=max_length
         )
         t2 = time.time()
         logger.info("Time taken for preprocessing the templates = %.2f seconds", t2 - t1)
@@ -158,6 +172,7 @@ def segment_and_plot_results(template_sequences, template_labels, data_sequence,
     logger.info("")
     t1 = time.time()
     # Perform segmentation of the data sequence
+    template_labels = results['template_labels']
     data_segments, labels = segment_repeat_sequences(
         data_sequence, results['templates_normalized'], results['templates_info'], results['template_counts'],
         results['feature_mask_per_action'], results['distance_thresholds'], results['length_stats'],
