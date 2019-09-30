@@ -544,13 +544,12 @@ def find_distance_thresholds(templates, template_labels, templates_info, feature
             logger.warning("Sample size of distances (%d) may be too small for reliable threshold estimation.",
                            distances.shape[0])
 
-        # To find the upper threshold, the `median + 3 MAD` is calculated, where MAD is the median absolute deviation
-        # of the distances from the median
+        # Upper threshold on the DTW distance
         perc = np.percentile(distances, [0, 25, 50, 75, 100])
         # med_abs_dev = np.median(np.abs(distances - perc[2]))
         # th = max(1.02 * perc[-1], perc[2] + 3 * med_abs_dev)
         iqr = perc[3] - perc[1]
-        th = max(1.02 * perc[-1], perc[3] + 1.5 * iqr)
+        th = max(1.05 * perc[-1], perc[3] + 1.5 * iqr)
         distance_thresholds.append(th)
         logger.info("Upper threshold on the DTW distance to templates = %.6f", distance_thresholds[-1])
         logger.info("Min = %.6f, Median = %.6f, Max = %.6f", perc[0], perc[2], perc[-1])
@@ -679,7 +678,6 @@ def preprocess_templates(templates, template_labels, features_per_action=None, n
         logger.info("Selecting the best subset of features for each action.")
     else:
         logger.info("Using the feature subsets per action specified as input.")
-
 
     feature_mask_per_action = find_best_feature_subset(
         templates_norm, template_labels, features_per_action=features_per_action, warping_window=warping_window,
