@@ -91,6 +91,20 @@ def plot_templates(templates, template_labels, output_direc):
             lab_str = "{}, {}".format(lab[0], lab[1])
             dim = seq.shape[1]
 
+            y_min = np.min(seq)
+            # Slightly smaller value
+            if y_min > 0:
+                y_min = 0.99 * y_min
+            else:
+                y_min = 1.01 * y_min
+
+            y_max = np.max(seq)
+            # Slightly larger value
+            if y_max > 0:
+                y_max = 1.01 * y_max
+            else:
+                y_max = 0.99 * y_max
+
             fig = plt.figure()
             index_vals = np.arange(seq.shape[0])
             for k in range(dim):
@@ -100,6 +114,7 @@ def plot_templates(templates, template_labels, output_direc):
                     ax1.set_xlabel("time index (t)", fontsize=10, fontweight='bold')
 
                 ax1.set_ylabel(r"$x_{}[t]$".format(k + 1), fontsize=10, fontweight='bold', rotation=0)
+                ax1.set_ylim(y_min, y_max)
                 if k == 0:
                     ax1.set_title(lab_str, fontsize=10, fontweight='bold')
 
