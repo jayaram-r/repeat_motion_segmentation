@@ -434,6 +434,28 @@ def helper_distance_to_templates(sequences, mask_features, warping_window, indic
     return d_min
 
 
+def generate_index_combinations(n, k, labels_group, num_groups, max_num_samples, j):
+    # Exclude the sequence at index `j` and estimate the distribution of its distance to a random
+    # sample of `k` sequences chosen from the remaining `n - 1` sequences
+    ind_not_j = [jj for jj in range(n) if jj != j]
+
+    if num_groups > 1:
+        # List all combinations of size `k` from `ind_not_j` that have all group labels occurring at least once
+        comb_list = [tup for tup in combinations(ind_not_j, k)
+                     if np.unique([labels_group[t] for t in tup]).shape[0] == num_groups]
+    else:
+        comb_list = list(combinations(ind_not_j, k))
+
+    len_comb_list = len(comb_list)
+    if len_comb_list > max_num_samples:
+        # Take a random sample of size `max_num_samples`
+        ind_samples = np.random.permutation(len_comb_list)[:max_num_samples]
+    else:
+        ind_samples = np.arange(len_comb_list)
+
+    return comb_list, ind_samples
+
+
 def find_distance_thresholds(templates, template_labels, templates_info, feature_mask_per_action, warping_window,
                              num_templates_to_select=None, max_num_samples=10000):
     """
@@ -502,6 +524,7 @@ def find_distance_thresholds(templates, template_labels, templates_info, feature
         logger.info("Action %d:", i + 1)
         logger.info("Selecting %d out of %d templates for matching based on DTW distance", k, n)
 
+        # The number of samples from each group is almost equal, i.e. a stratified sampling is done
         labels_group = np.array([tup[1] for tup in template_labels[i]])
         ind = stratified_sample(labels_group, n, k)
         templates_selected.append(tuple([templates[i][j] for j in ind]))
@@ -509,18 +532,23 @@ def find_distance_thresholds(templates, template_labels, templates_info, feature
         templates_info_selected.append(tuple([templates_info[i][j] for j in ind]))
         template_counts.append(ind.shape[0])
 
-        comb_list = list(combinations(range(n - 1), k))
-        len_comb_list = len(comb_list)
-        a = int(np.ceil(float(max_num_samples) / n))
-        if len_comb_list > a:
-            comb_list = [comb_list[j] for j in np.random.permutation(len_comb_list)[:a]]
-
-        if num_proc > 1:
+        # Calculating distribution of DTW distances
+        num_groups = np.unique(labels_group).shape[0]
+        if num_proc == 1:
+            distances = []
+            for j in range(n):
+                comb_list, ind_samples = generate_index_combinations(n, k, labels_group, num_groups,
+                                                                     max_num_samples, j)
+                distances.extend([
+                    helper_distance_to_templates(templates[i], feature_mask_per_action[i], warping_window,
+                                                 [j] + list(comb_list[jj])) for jj in ind_samples
+                ])
+        else:
             index_list = []
             for j in range(n):
-                # Every index excluding `j`
-                ind = [jj for jj in range(n) if jj != j]
-                index_list.extend([[j] + [ind[t] for t in tup] for tup in comb_list])
+                comb_list, ind_samples = generate_index_combinations(n, k, labels_group, num_groups,
+                                                                     max_num_samples, j)
+                index_list.extend([[j] + list(comb_list[jj]) for jj in ind_samples])
 
             helper_partial = partial(helper_distance_to_templates, templates[i], feature_mask_per_action[i],
                                      warping_window)
@@ -529,25 +557,12 @@ def find_distance_thresholds(templates, template_labels, templates_info, feature
             _ = pool_obj.map_async(helper_partial, index_list, chunksize=None, callback=distances.extend)
             pool_obj.close()
             pool_obj.join()
-        else:
-            distances = []
-            for j in range(n):
-                # Every index excluding `j`
-                ind = [jj for jj in range(n) if jj != j]
-                distances.extend([
-                    helper_distance_to_templates(templates[i], feature_mask_per_action[i], warping_window,
-                                                 [j] + [ind[t] for t in tup]) for tup in comb_list
-                ])
-
-        distances = np.array(distances)
-        if distances.shape[0] < 100:
-            logger.warning("Sample size of distances (%d) may be too small for reliable threshold estimation.",
-                           distances.shape[0])
 
         # Upper threshold on the DTW distance
+        logger.info("Number of distance samples = %d", len(distances))
         perc = np.percentile(distances, [0, 25, 50, 75, 100])
-        # med_abs_dev = np.median(np.abs(distances - perc[2]))
-        # th = max(1.02 * perc[-1], perc[2] + 3 * med_abs_dev)
+        # med_abs_dev = np.median(np.abs(np.array(distances) - perc[2]))
+        # th = max(1.05 * perc[-1], perc[2] + 3 * med_abs_dev)
         iqr = perc[3] - perc[1]
         th = max(1.05 * perc[-1], perc[3] + 1.5 * iqr)
         distance_thresholds.append(th)
